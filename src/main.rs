@@ -10,6 +10,11 @@ use inputbot::KeybdKey::{RKey, AKey, LShiftKey};
 use inputbot::handle_input_events;
 
 use serde::{Serialize, Deserialize};
+use glib::glib_sys::g_path_skip_root;
+use winapi::um::mmeapi::waveInAddBuffer;
+
+#[macro_use]
+extern crate lazy_static;
 
 fn bind_combo<F: Fn() + Send + Sync + 'static + Clone>(keys : Vec<inputbot::KeybdKey>, callback : F) {
     let kc = keys.clone();
@@ -141,15 +146,171 @@ fn build_ui(application: &gtk::Application) {
 }
 
 
+fn wait_for_hotkey() {
+
+
+}
+
+use std::sync::atomic;
+use std::sync;
+use std::sync::mpsc::{Sender, Receiver, self, channel};
+
+
+enum WindowsApiEvent {
+    HotkeyRegister { id : i32, modifiers : u32, vk : u32},
+}
+
+struct HotkeyData {
+    thread_handle : Option<::std::thread::JoinHandle<()>>,
+    thread_id : usize,
+    tx : Option<Sender<WindowsApiEvent>>,
+}
+
+struct HotkeyProxy {
+    thread_id : usize,
+    tx : Sender<WindowsApiEvent>,
+}
+
+impl HotkeyProxy {
+    fn post_event(&self, event : WindowsApiEvent) {
+        unsafe { winapi::um::winuser::PostThreadMessageA(self.thread_id as u32, 30000, 0, 0) };
+        self.tx.send(event);
+    }
+}
+
+enum ReceivedMessage {
+    Hotkey { id: i32},
+    Nothing,
+}
+
+fn get_single_message() -> ReceivedMessage {
+    use winapi::um::winuser::{LPMSG, GetMessageA, MSG, *};
+    use std::default::Default;
+    let mut msg = Default::default();
+    if unsafe { GetMessageA(&mut msg, 0 as winapi::shared::windef::HWND, 0, 0) != 0 } {
+        match msg.message {
+            WM_HOTKEY => {
+                println!("got hotkey: {:?}", msg.wParam);
+                return ReceivedMessage::Hotkey {id : msg.wParam as i32 };
+            }
+            30000 => {
+                println!("hey, you see my dummy message :) ");
+            }
+            _ => {
+
+            }
+        }
+    }
+
+    ReceivedMessage::Nothing
+
+}
+
+impl HotkeyData {
+    fn do_it(hotkey : WindowsApiEvent) {
+        Self::init().post_event(hotkey);
+    }
+
+    fn init() -> HotkeyProxy {
+        let context = &mut (*HOTKEY_DAYA.lock().unwrap());
+        if context.is_none() {
+            let ( tx_tid, rx_tid) =  mpsc::channel();
+            let (tx, rx) = mpsc::channel();
+            let thread_handle = Some(::std::thread::spawn(move || {
+                let win_thread_id = unsafe { winapi::um::processthreadsapi::GetCurrentThreadId() } as usize;
+                if win_thread_id == 0 {
+                    panic!("win_thread_id == 0?");
+                }
+                tx_tid.send(win_thread_id);
+
+                loop {
+                    match get_single_message() {
+                        ReceivedMessage::Hotkey { id } => { println!("hotkey id'd triggered: {}", id) },
+                        ReceivedMessage::Nothing => {},
+                    }
+
+                    if let Ok(request) = rx.try_recv() {
+                        match request {
+                            WindowsApiEvent::HotkeyRegister { id, modifiers, vk } => {
+                                println!("got request to register hotkey!");
+                                unsafe {
+                                    winapi::um::winuser::RegisterHotKey(
+                                        0 as winapi::shared::windef::HWND,
+                                        id,
+                                        modifiers, vk
+                                    );
+                                }
+                            },
+                        }
+                    }
+                }
+//                println!("got hotkey: {:?}", hotkey);
+            }));
+
+            let thread_id = rx_tid.recv().expect("failed to recv thread_handle");
+
+            *context = Some(HotkeyData {
+                thread_id,
+                thread_handle,
+                tx : Some(tx),
+            });
+
+            println!("thread id: {:?}", context.as_ref().unwrap().thread_id);
+        }
+
+        let context = context.as_ref().unwrap();
+
+        HotkeyProxy {
+            thread_id : context.thread_id,
+            tx : context.tx.clone().unwrap(),
+        }
+    }
+
+}
+
+lazy_static! {
+    static ref HOTKEY_DAYA: Mutex<Option<HotkeyData>> = {
+            Mutex::new(None)
+//            let (tx, rx) = channel();
+//            Mutex::new(HotkeyData {
+//                thread : None,
+//                thread_handle : usize,
+//                tx : None,
+//            })
+    };
+}
+
 fn main() {
-    let application = Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
-        .expect("failed to initialize GTK application");
+    HotkeyData::do_it(WindowsApiEvent::HotkeyRegister {modifiers : 0, id : 7, vk : 0x42});
 
-//    bind_combo(vec![AKey, RKey], || { println!( " multi press!"); });
+    loop {
+//        wait_for_hotkey();
 
-    application.connect_activate(|app| {
-        build_ui(app);
-    });
+//        unsafe { HOTKEY_DAYA.sth() };
+        ::std::thread::sleep_ms(1000);
+    }
+//    let application = Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
+//        .expect("failed to initialize GTK application");
+//
+////    bind_combo(vec![AKey, RKey], || { println!( " multi press!"); });
+//
+//    application.connect_activate(|app| {
+//        build_ui(app);
+//    });
+//
+//    ::std::thread::spawn(|| {
+//        loop {
+//            ::std::thread::sleep_ms(1000);
+//            let clip = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+//
+//            println!("hai: {:?}", clip.wait_for_text());
+//        }
+//    .set_text("pXoXtXaXtXoX");
+
+//    clip.request_text( | cp, maybe_text| {
+//        println!("got clip!: {:?}", maybe_text);
+//    });
+//    });
 
 //    application.connect_activate(move |app| {
 //        let (tx, rx) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
@@ -193,7 +354,7 @@ fn main() {
 //        });
 //    });
 
-    application.run(&[]);
+//    application.run(&[]);
 }
 
 
