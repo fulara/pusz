@@ -215,6 +215,24 @@ fn get_single_message() -> ReceivedMessage {
 
 }
 
+unsafe extern "system"
+fn find_window(hwnd: winapi::shared::windef::HWND, pid: winapi::shared::minwindef::LPARAM) -> i32 {
+//    println!("potatko iteration");
+    let mut process_id = 0;
+    winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut process_id);
+
+    println!("my pid is: {} search is: {}", pid, process_id);
+    if process_id == (pid as u32) {
+        println!("found it yupi.");
+    }
+    return 1;
+}
+
+fn to_wstring(str: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    ::std::ffi::OsStr::new(str).encode_wide().chain(Some(0).into_iter()).collect()
+}
+
 impl HotkeyData {
     fn do_it(hotkey : WindowsApiEvent) {
         Self::init().post_event(hotkey);
@@ -236,19 +254,52 @@ impl HotkeyData {
 
                 let mut clipboard_handlers : Vec<ClipboardHandler> = vec![];
 
+                let hwnd = unsafe {
+                    let class_name = to_wstring("meh_window");
+
+                    let wnd_class = winapi::um::winuser::WNDCLASSW {
+                        style : winapi::um::winuser::CS_OWNDC,		// Style
+                        lpfnWndProc : Some(winapi::um::winuser::DefWindowProcW),			// The callbackfunction for any window event that can occur in our window!!! Here you could react to events like WM_SIZE or WM_QUIT.
+                        hInstance : winapi::um::libloaderapi::GetModuleHandleW(  ::std::ptr::null_mut() ),							// The instance handle for our application which we can retrieve by calling GetModuleHandleW.
+                        lpszClassName : class_name.as_ptr(),					// Our class name which needs to be a UTF-16 string (defined earlier before unsafe). as_ptr() (Rust's own function) returns a raw pointer to the slice's buffer
+                        cbClsExtra : 0,
+                        cbWndExtra : 0,
+                        hIcon: ::std::ptr::null_mut(),
+                        hCursor: ::std::ptr::null_mut(),
+                        hbrBackground: ::std::ptr::null_mut(),
+                        lpszMenuName: ::std::ptr::null_mut(),
+                    };
+
+                    // We have to register this class for Windows to use
+                    winapi::um::winuser::RegisterClassW( &wnd_class );
+
+                    let window_name = to_wstring("pusz temporary workaround to receive clipboard.");
+                    let hwnd = winapi::um::winuser::CreateWindowExW(
+                        0,
+
+                        class_name.as_ptr(),
+                        window_name.as_ptr(),
+                        winapi::um::winuser::WS_VISIBLE,
+                        0,
+                        0,
+                        0,
+                        0,
+                        ::std::ptr::null_mut(),
+                        ::std::ptr::null_mut(),
+                        ::std::ptr::null_mut(),
+                        ::std::ptr::null_mut());
+
+                    winapi::um::winuser::ShowWindow(hwnd, winapi::um::winuser::SW_HIDE);
+                    println!("hwnd is: {:?} err: {:?}", hwnd, winapi::um::errhandlingapi::GetLastError());
+
+                    hwnd
+                };
+
                 let win_pid = unsafe { winapi::um::processthreadsapi::GetCurrentProcessId() } ;
 //                winapi::um::winuser::GetWindowThreadProcessId()
 
                     unsafe {
-                        winapi::um::winuser::EnumWindows(Some(|hwnd, pid| {
-                            let mut process_id = 0;
-                            winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut process_id);
-
-//                            if process_id == (pid as u32) {
-//                                println!("found it yupi.");
-//                            }
-                            return 1;
-                        }), win_pid as isize);
+//                        winapi::um::winuser::EnumWindows(Some(find_window), win_pid as isize);
                     };
 
                 loop {
@@ -279,7 +330,7 @@ impl HotkeyData {
                             },
                             WindowsApiEvent::AddClipboardListener { handler } => {
                                 if clipboard_handlers.is_empty() {
-                                    let result = unsafe { winapi::um::winuser::AddClipboardFormatListener(0 as winapi::shared::windef::HWND) };
+                                    let result = unsafe { winapi::um::winuser::AddClipboardFormatListener(hwnd) };
 
                                     println!("we now added clip listener, eh? {} {:?}", result, unsafe { winapi::um::errhandlingapi::GetLastError() } );
                                 }
