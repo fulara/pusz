@@ -15,6 +15,9 @@ serde_json = "1.0"
 glib = "0.8"
 gdk = "0.11"
 
+# Just using it for set_clibpoard - could just extract it out and use?
+clipboard-win = "2.2.0"
+
 [dependencies.gtk]
 version = "0.7.0"
 features = ["v3_24"]
@@ -34,5 +37,6 @@ features = [
     "winuser",
     "stringapiset",
     "mmeapi",
+    "errhandlingapi",
     "impl-default"
 ]
