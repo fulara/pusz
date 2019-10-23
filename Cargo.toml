@@ -5,8 +5,6 @@ authors = ["fulara"]
 edition = "2018"
 
 [dependencies]
-inputbot = "0.4.0"
-
 lazy_static = "1.4"
 
 serde = { version = "1.0", features = ["derive"] }
