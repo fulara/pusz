@@ -2,13 +2,15 @@ use std::sync::atomic;
 use std::sync::{self, Mutex, Arc};
 use std::sync::mpsc::{Sender, Receiver, self, channel};
 use std::collections::HashMap;
-use clipboard_win::get_clipboard_string;
+use clipboard_win::{get_clipboard_string, set_clipboard_string};
 
 pub type BindHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 pub type ClipboardHandler = Arc<dyn Fn(String) + Send + Sync + 'static>;
 
 pub enum WindowsApiEvent {
     HotkeyRegister { id : i32, modifiers : u32, vk : u32, handler : BindHandler},
+
+    SetClipboard { text : String },
     AddClipboardListener { handler  : ClipboardHandler},
 }
 
@@ -86,6 +88,14 @@ impl HotkeyData {
         Self::init().post_event(hotkey);
     }
 
+    pub fn set_clipboard(text: &str) {
+        Self::do_it(WindowsApiEvent::SetClipboard { text : text.to_owned()});
+    }
+
+    pub fn get_clipboard() -> Option<String> {
+        get_clipboard_string().ok()
+    }
+
     fn init() -> HotkeyProxy {
         let context = &mut (*HOTKEY_DAYA.lock().unwrap());
         if context.is_none() {
@@ -99,8 +109,9 @@ impl HotkeyData {
                 tx_tid.send(win_thread_id);
 
                 let mut handlers : HashMap<i32, BindHandler> = HashMap::new();
-
                 let mut clipboard_handlers : Vec<ClipboardHandler> = vec![];
+
+                let mut last_set_clipboard = String::new();
 
                 let hwnd = unsafe {
                     let class_name = to_wstring("meh_window");
@@ -153,11 +164,15 @@ impl HotkeyData {
                         },
                         ReceivedMessage::Nothing => {},
                         ReceivedMessage::ClipboardUpdate => {
-                            for listener in &clipboard_handlers {
-                                if let Ok(text) = get_clipboard_string() {
-                                    listener(text);
+                            if let Ok(text) = get_clipboard_string() {
+                                if text != last_set_clipboard {
+                                    for listener in &clipboard_handlers {
+                                        listener(text.clone());
+                                    }
                                 }
                             }
+
+                            last_set_clipboard.clear();
                         }
                     }
 
@@ -176,12 +191,18 @@ impl HotkeyData {
                             },
                             WindowsApiEvent::AddClipboardListener { handler } => {
                                 if clipboard_handlers.is_empty() {
+                                    last_set_clipboard = get_clipboard_string().unwrap_or_default();
+
                                     let result = unsafe { winapi::um::winuser::AddClipboardFormatListener(hwnd) };
 
                                     println!("we now added clip listener, eh? {} {:?}", result, unsafe { winapi::um::errhandlingapi::GetLastError() } );
                                 }
 
                                 clipboard_handlers.push(handler);
+                            }
+                            WindowsApiEvent::SetClipboard { text } => {
+                                last_set_clipboard = text.clone();
+                                set_clipboard_string(&text);
                             }
                         }
                     }
