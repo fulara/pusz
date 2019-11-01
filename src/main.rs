@@ -1,26 +1,23 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::thread::{spawn, sleep, sleep_ms};
+use std::thread::{spawn, sleep};
 use std::time::{Duration,
                 SystemTime};
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc};
 use std::rc::Rc;
 use std::cell::RefCell;
 
 use gio::prelude::*;
 
-use glib::glib_sys::g_path_skip_root;
-
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, Button, Editable};
+use gtk::{Application};
 
 use serde::{Serialize, Deserialize};
 
 mod winapi_stuff;
 use winapi_stuff::*;
 use std::io::Write;
-use std::fs::symlink_metadata;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -45,28 +42,51 @@ fn draw(_window: &gtk::ApplicationWindow, ctx: &cairo::Context) -> Inhibit {
 
 fn draw_entry_background(_window: &gtk::Box, ctx: &cairo::Context) -> Inhibit {
     // crucial for transparency
-    ctx.set_source_rgba(1.0, 0.0, 0.0, 0.5);
+    if _window.has_focus() {
+        ctx.set_source_rgba(1.0, 0.0, 1.0, 1.0);
+    } else {
+        ctx.set_source_rgba(1.0, 0.0, 0.0, 1.0);
+    }
     ctx.set_operator(cairo::Operator::Screen);
     ctx.paint();
     Inhibit(false)
 }
 
-fn spawn_entry(text : &str) -> gtk::Box {
-    let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+fn spawn_entry(main_edit : gtk::Entry,text : &str) -> gtk::Box {
+    let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+//    container.connect("key-press-event", true, |x| { println!("got: {:?}", x); Some(true.to_value()) });
 
+    container.connect_key_press_event(move |_, event_key| {
+        use gdk::enums::key::*;
+        #[allow(non_upper_case_globals)]
+        match event_key.get_keyval() {
+            Return => {
+                println!("got return.. copied to clip");
+                Inhibit(false)
+            }
+            Down | Up  => {
+                Inhibit(false)
+            }
+            _ => {
+                main_edit.grab_focus_without_selecting();
+                let _ = main_edit.emit("key-press-event", &[&event_key.to_value()]);
+                Inhibit(true)
+            }
+        }
+        });
+    container.set_can_focus(true);
+//    container.set_has_window(true);
     container.connect_draw(draw_entry_background);
-    let entry = gtk::Label::new(None);
-    entry.set_selectable(true);
-    entry.set_markup(text);
 
-    let workaround_button = gtk::Button::new_with_label("click to copy to clipboard");
+    let workaround_button = gtk::Button::new_with_label(text);
 
     let text = text.to_owned();
-    workaround_button.connect_clicked(move |b| {
+    workaround_button.connect_clicked(move |_| {
         HotkeyData::set_clipboard(&text);
     });
 
-    container.add(&entry);
+    workaround_button.emit_clicked();
+
     container.add(&workaround_button);
 
     container
@@ -92,10 +112,10 @@ fn load_data_model(file : &str) -> DataModel {
 }
 
 fn save_data_model(file : &str, model : &DataModel) {
-    use std::fs::{self, File};
+    use std::fs::File;
 
     let mut file = File::create(file).expect("couldnt create a file.");
-    file.write_all(serde_json::to_string(model).expect("failed to serialize").as_bytes());
+    file.write_all(serde_json::to_string(model).expect("failed to serialize").as_bytes()).expect("couldnt dump data model.");
 }
 
 struct Context {
@@ -124,7 +144,7 @@ impl Context {
 }
 
 fn build_ui(application: &gtk::Application) {
-    let mut ctx = Rc::new(RefCell::new(Context{
+    let ctx = Rc::new(RefCell::new(Context{
         model : load_data_model("pusz.json")
     }));
 
@@ -135,19 +155,21 @@ fn build_ui(application: &gtk::Application) {
     let (tx, rx) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
 
     HotkeyData::do_it(WindowsApiEvent::AddClipboardListener { handler : Arc::new(move |clip| {
-        tx.send(clip); }
+        tx.send(clip).expect("send failure");
+    }
     )} );
 
     window.set_title("pusz");
     window.set_border_width(0);
     window.set_position(gtk::WindowPosition::Center);
     window.set_default_size(840, 480);
-//    window.set_decorated(false);
+    window.set_decorated(false);
+
+//    let _ = window.connect("focus-in-event", true, |a| { println!("hai.") ;Some(true.to_value())});
 
     let input_field = gtk::Entry::new();
 
     let row = gtk::Box::new(gtk::Orientation::Vertical, 1);
-    let event_box = gtk::EventBox::new();
 
     let scroll_container = gtk::ScrolledWindow::new( gtk::NONE_ADJUSTMENT, gtk::NONE_ADJUSTMENT);
     scroll_container.set_max_content_height(400);
@@ -157,7 +179,7 @@ fn build_ui(application: &gtk::Application) {
     scroll_container.add(&scroll_insides);
 
     for i in 0..1 {
-        scroll_insides.add(&spawn_entry(&format!("abc: {}", i)));
+        scroll_insides.add(&spawn_entry(input_field.clone(), &format!("abc: {}", i)));
     }
 
     row.add(&input_field);
@@ -165,14 +187,15 @@ fn build_ui(application: &gtk::Application) {
     row.add(&scroll_container);
     row.set_child_expand(&scroll_container, true);
 
-    let mut visible = true;
+//    let mut visible = true;
 
     window.add(&row);
 
     window.show_all();
     {
         let ctx = Rc::clone(&ctx);
-        input_field.connect_changed(move |entry| {
+        let if_ = input_field.clone();
+        if_.connect_changed(move |entry| {
             for c in &scroll_insides.get_children() {
                 scroll_insides.remove(c);
             }
@@ -180,7 +203,7 @@ fn build_ui(application: &gtk::Application) {
             if let Some(text) = entry.get_text() {
                 for data_entry in ctx.borrow().find_matching_entries(&text) {
                     println!("indeed found sth: {:?}", data_entry);
-                    scroll_insides.add(&spawn_entry(&data_entry.text));
+                    scroll_insides.add(&spawn_entry(input_field.clone(), &data_entry.text));
 
                     scroll_insides.show_all();
                 }
@@ -190,19 +213,7 @@ fn build_ui(application: &gtk::Application) {
     }
 
     rx.attach(None, move |val| {
-
-
         ctx.borrow_mut().add_entry(&val);
-
-//        scroll_insides.erase();
-
-//        visible = !visible;
-//        if visible {
-//            scroll_container.hide();
-//        } else {
-//            scroll_container.show();
-//
-//        }
 
         glib::Continue(true)
     });
@@ -217,7 +228,7 @@ fn main() {
     });
 
     spawn(|| {
-        sleep_ms(5000);
+        sleep(Duration::from_secs(5));
        HotkeyData::set_clipboard("potatkowa kraina");
     });
 
@@ -227,5 +238,5 @@ fn main() {
 
 #[cfg(test)]
 mod model_tests {
-    use super::*;
+//    use super::*;
 }

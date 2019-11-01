@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::sync::atomic;
 use std::sync::{self, Mutex, Arc};
 use std::sync::mpsc::{Sender, Receiver, self, channel};
@@ -7,6 +9,7 @@ use clipboard_win::{get_clipboard_string, set_clipboard_string};
 pub type BindHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 pub type ClipboardHandler = Arc<dyn Fn(String) + Send + Sync + 'static>;
 
+#[allow(unused)]
 pub enum WindowsApiEvent {
     HotkeyRegister { id : i32, modifiers : u32, vk : u32, handler : BindHandler},
 
@@ -27,8 +30,8 @@ pub struct HotkeyProxy {
 
 impl HotkeyProxy {
     pub fn post_event(&self, event : WindowsApiEvent) {
+        self.tx.send(event).expect("post event failure");
         unsafe { winapi::um::winuser::PostThreadMessageA(self.thread_id as u32, 30000, 0, 0) };
-        self.tx.send(event);
     }
 }
 
@@ -45,15 +48,12 @@ fn get_single_message() -> ReceivedMessage {
     if unsafe { GetMessageA(&mut msg, 0 as winapi::shared::windef::HWND, 0, 0) != 0 } {
         match msg.message {
             WM_HOTKEY => {
-                println!("got hotkey: {:?}", msg.wParam);
                 return ReceivedMessage::Hotkey {id : msg.wParam as i32 };
             }
             WM_CLIPBOARDUPDATE => {
-                println!("got clipboard update.");
                 return ReceivedMessage::ClipboardUpdate;
             }
             30000 => {
-                println!("hey, you see my dummy message :) ");
             }
             _ => {
 
@@ -63,19 +63,6 @@ fn get_single_message() -> ReceivedMessage {
 
     ReceivedMessage::Nothing
 
-}
-
-unsafe extern "system"
-fn find_window(hwnd: winapi::shared::windef::HWND, pid: winapi::shared::minwindef::LPARAM) -> i32 {
-//    println!("potatko iteration");
-    let mut process_id = 0;
-    winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut process_id);
-
-    println!("my pid is: {} search is: {}", pid, process_id);
-    if process_id == (pid as u32) {
-        println!("found it yupi.");
-    }
-    return 1;
 }
 
 fn to_wstring(str: &str) -> Vec<u16> {
@@ -92,6 +79,7 @@ impl HotkeyData {
         Self::do_it(WindowsApiEvent::SetClipboard { text : text.to_owned()});
     }
 
+    #[allow(unused)]
     pub fn get_clipboard() -> Option<String> {
         get_clipboard_string().ok()
     }
@@ -106,7 +94,7 @@ impl HotkeyData {
                 if win_thread_id == 0 {
                     panic!("win_thread_id == 0?");
                 }
-                tx_tid.send(win_thread_id);
+                tx_tid.send(win_thread_id).expect("tid send failure");
 
                 let mut handlers : HashMap<i32, BindHandler> = HashMap::new();
                 let mut clipboard_handlers : Vec<ClipboardHandler> = vec![];
@@ -149,7 +137,6 @@ impl HotkeyData {
                         ::std::ptr::null_mut());
 
                     winapi::um::winuser::ShowWindow(hwnd, winapi::um::winuser::SW_HIDE);
-                    println!("hwnd is: {:?} err: {:?}", hwnd, winapi::um::errhandlingapi::GetLastError());
 
                     hwnd
                 };
@@ -157,7 +144,7 @@ impl HotkeyData {
                 let win_pid = unsafe { winapi::um::processthreadsapi::GetCurrentProcessId() } ;
                 loop {
                     match get_single_message() {
-                        ReceivedMessage::Hotkey { id } => { println!("hotkey id'd triggered: {}", id);
+                        ReceivedMessage::Hotkey { id } => {
                             if let Some(handler) = handlers.get(&id) {
                                 handler();
                             }
@@ -179,7 +166,6 @@ impl HotkeyData {
                     if let Ok(request) = rx.try_recv() {
                         match request {
                             WindowsApiEvent::HotkeyRegister { id, modifiers, vk, handler } => {
-                                println!("got request to register hotkey!");
                                 handlers.insert(id, handler);
                                 unsafe {
                                     winapi::um::winuser::RegisterHotKey(
@@ -193,21 +179,18 @@ impl HotkeyData {
                                 if clipboard_handlers.is_empty() {
                                     last_set_clipboard = get_clipboard_string().unwrap_or_default();
 
-                                    let result = unsafe { winapi::um::winuser::AddClipboardFormatListener(hwnd) };
-
-                                    println!("we now added clip listener, eh? {} {:?}", result, unsafe { winapi::um::errhandlingapi::GetLastError() } );
+                                    unsafe { winapi::um::winuser::AddClipboardFormatListener(hwnd) };
                                 }
 
                                 clipboard_handlers.push(handler);
                             }
                             WindowsApiEvent::SetClipboard { text } => {
                                 last_set_clipboard = text.clone();
-                                set_clipboard_string(&text);
+                                let _ = set_clipboard_string(&text);
                             }
                         }
                     }
                 }
-//                println!("got hotkey: {:?}", hotkey);
             }));
 
             let thread_id = rx_tid.recv().expect("failed to recv thread_handle");
@@ -217,8 +200,6 @@ impl HotkeyData {
                 thread_handle,
                 tx : Some(tx),
             });
-
-            println!("thread id: {:?}", context.as_ref().unwrap().thread_id);
         }
 
         let context = context.as_ref().unwrap();
@@ -232,6 +213,7 @@ impl HotkeyData {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[allow(unused)]
 pub enum Modifier {
     None = 0,
     Alt = 1,
@@ -247,6 +229,7 @@ impl Modifier {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[allow(unused)]
 pub enum Key {
     Return = winapi::um::winuser::VK_RETURN as isize,
     Control = winapi::um::winuser::VK_CONTROL as isize,
