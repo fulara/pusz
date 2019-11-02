@@ -52,16 +52,42 @@ fn draw_entry_background(_window: &gtk::Box, ctx: &cairo::Context) -> Inhibit {
     Inhibit(false)
 }
 
-fn spawn_entry(main_edit : gtk::Entry,text : &str) -> gtk::Box {
-    let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-//    container.connect("key-press-event", true, |x| { println!("got: {:?}", x); Some(true.to_value()) });
+#[derive(PartialEq, Debug, Clone)]
+struct SpecialEntry {
+    clip : String,
+    description : String,
+}
 
+fn special_entry(ctx : &Context, text : &str) -> Vec<SpecialEntry> {
+    let mut entries = vec![];
+
+    for (regex, base) in ctx.special_entries_builders.iter() {
+        for cap in regex.captures_iter(text) {
+            entries.push(SpecialEntry {
+                description: format!("snow link: {}", cap[1].to_owned()),
+                clip: format!("https://ig.service-now.com/{}.do?sysparm_query=number={}", base, cap[1].to_owned()),
+            })
+        }
+    }
+
+    entries
+}
+
+fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry,text : &str) -> gtk::Box {
+    let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+    let handler = {
+        let text = text.to_owned();
+        move || { HotkeyData::set_clipboard(&text) }
+    };
+
+    let handler_clone = handler.clone();
     container.connect_key_press_event(move |_, event_key| {
         use gdk::enums::key::*;
         #[allow(non_upper_case_globals)]
         match event_key.get_keyval() {
             Return => {
-                println!("got return.. copied to clip");
+                handler_clone();
                 Inhibit(false)
             }
             Down | Up  => {
@@ -75,19 +101,38 @@ fn spawn_entry(main_edit : gtk::Entry,text : &str) -> gtk::Box {
         }
         });
     container.set_can_focus(true);
-//    container.set_has_window(true);
+//    container.set_has_window(true); crashes app.
     container.connect_draw(draw_entry_background);
 
     let workaround_button = gtk::Button::new_with_label(text);
 
     let text = text.to_owned();
     workaround_button.connect_clicked(move |_| {
-        HotkeyData::set_clipboard(&text);
+        handler();
     });
-
-    workaround_button.emit_clicked();
-
     container.add(&workaround_button);
+
+    for special_entry in special_entry(&ctx.borrow(), &text) {
+        let special_entry_button = gtk::Button::new_with_label(&special_entry.description);
+        special_entry_button.connect_clicked(move |_| {
+            HotkeyData::set_clipboard(&special_entry.clip);
+        });
+
+        container.add(&special_entry_button);
+    }
+
+    let removal_button = gtk::Button::new_with_label("X");
+    {
+        let container = container.clone();
+        container.add(&removal_button);
+        removal_button.connect_clicked(move |_| {
+            let ctx: &mut Context = &mut ctx.borrow_mut();
+            ctx.remove_entry(&text);
+
+            container.hide();
+            container.grab_focus();
+        });
+    }
 
     container
 }
@@ -115,14 +160,30 @@ fn save_data_model(file : &str, model : &DataModel) {
     use std::fs::File;
 
     let mut file = File::create(file).expect("couldnt create a file.");
-    file.write_all(serde_json::to_string(model).expect("failed to serialize").as_bytes()).expect("couldnt dump data model.");
+    file.write_all(serde_json::to_string_pretty(model).expect("failed to serialize").as_bytes()).expect("couldnt dump data model.");
 }
 
 struct Context {
+    special_entries_builders : Vec<(regex::Regex, String)>,
+
     model : DataModel,
 }
 
 impl Context {
+    fn new(model : DataModel) -> Self {
+        let r = [(r"(INC\d{4,})", "incident"),
+            (r"(RITM\d{4,})", "sc_req_item"),
+            (r"(CHG\d{4,})", "change_request"),
+            (r"(PRB\d{4,})", "problem")
+            ,(r"(PRBTASK\d{4,})", "problem_task")];
+
+
+        Self {
+            model,
+            special_entries_builders : r.iter().map(|(pattern, base)| (regex::Regex::new(pattern).expect(&format!("failure to build regex from {}", pattern)), base.to_string())).collect(),
+        }
+    }
+
     fn add_entry(&mut self, text : &str) {
         for e in &mut self.model.clips {
             if e.text == text {
@@ -136,6 +197,13 @@ impl Context {
         save_data_model("pusz.json", &self.model);
     }
 
+    fn remove_entry(&mut self, text : &str) {
+        // need more efficient! :)
+        self.model.clips.retain( |e| e.text != text);
+
+        save_data_model("pusz.json", &self.model);
+    }
+
     fn find_matching_entries(&self, needle : &str) -> impl Iterator<Item = &DataEntry> {
         let needle = needle.to_lowercase();
         //ineff but to be improved
@@ -143,10 +211,13 @@ impl Context {
     }
 }
 
+enum PuszEvent {
+    ClipboardChanged(String),
+    BringToFront,
+}
+
 fn build_ui(application: &gtk::Application) {
-    let ctx = Rc::new(RefCell::new(Context{
-        model : load_data_model("pusz.json")
-    }));
+    let ctx = Rc::new(RefCell::new(Context::new(load_data_model("pusz.json"))));
 
     let window = gtk::ApplicationWindow::new(application);
     window.connect_screen_changed(set_visual);
@@ -154,10 +225,15 @@ fn build_ui(application: &gtk::Application) {
     window.set_app_paintable(true); // crucial for transparency
     let (tx, rx) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
 
-    HotkeyData::do_it(WindowsApiEvent::AddClipboardListener { handler : Arc::new(move |clip| {
-        tx.send(clip).expect("send failure");
+    {
+        let tx = tx.clone();
+        HotkeyData::do_it(WindowsApiEvent::AddClipboardListener {
+            handler: Arc::new(move |clip| {
+                tx.send(PuszEvent::ClipboardChanged(clip)).expect("send failure");
+            }
+            )
+        });
     }
-    )} );
 
     window.set_title("pusz");
     window.set_border_width(0);
@@ -165,7 +241,15 @@ fn build_ui(application: &gtk::Application) {
     window.set_default_size(840, 480);
     window.set_decorated(false);
 
-//    let _ = window.connect("focus-in-event", true, |a| { println!("hai.") ;Some(true.to_value())});
+    window.connect_focus_in_event(|_, event| {
+//        println!("gained focus.");
+        Inhibit(false)
+    } );
+
+    window.connect_focus_out_event(|_, event| {
+//        println!("lost focus.");
+        Inhibit(false)
+    } );
 
     let input_field = gtk::Entry::new();
 
@@ -177,10 +261,6 @@ fn build_ui(application: &gtk::Application) {
 
     let scroll_insides = gtk::Box::new(gtk::Orientation::Vertical, 1);
     scroll_container.add(&scroll_insides);
-
-    for i in 0..1 {
-        scroll_insides.add(&spawn_entry(input_field.clone(), &format!("abc: {}", i)));
-    }
 
     row.add(&input_field);
 //    row.pack_start(&input_field, false, false, 10);
@@ -202,8 +282,7 @@ fn build_ui(application: &gtk::Application) {
 
             if let Some(text) = entry.get_text() {
                 for data_entry in ctx.borrow().find_matching_entries(&text) {
-                    println!("indeed found sth: {:?}", data_entry);
-                    scroll_insides.add(&spawn_entry(input_field.clone(), &data_entry.text));
+                    scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &data_entry.text));
 
                     scroll_insides.show_all();
                 }
@@ -212,11 +291,21 @@ fn build_ui(application: &gtk::Application) {
         });
     }
 
-    rx.attach(None, move |val| {
-        ctx.borrow_mut().add_entry(&val);
-
+    rx.attach(None, move |event| {
+        match event {
+            PuszEvent::ClipboardChanged(clipboard) => {
+                            ctx.borrow_mut().add_entry(&clipboard);
+            },
+            PuszEvent::BringToFront => {
+                window.present();
+            },
+        }
         glib::Continue(true)
     });
+
+    HotkeyData::register_hotkey(13, winapi_stuff::Key::F1, Modifier::None, Arc::new(move |_| {
+        tx.send(PuszEvent::BringToFront).unwrap();
+    }));
 }
 
 fn main() {
@@ -227,16 +316,27 @@ fn main() {
         build_ui(app);
     });
 
-    spawn(|| {
-        sleep(Duration::from_secs(5));
-       HotkeyData::set_clipboard("potatkowa kraina");
-    });
-
     application.run(&[]);
 }
 
-
 #[cfg(test)]
 mod model_tests {
-//    use super::*;
+    use super::*;
+    #[test]
+    fn special_entry_snow() {
+
+        let ctx = Context::new(DataModel { clips : vec![]});
+
+        assert_eq!(special_entry(&ctx,"invalid"), vec![]);
+        assert_eq!(special_entry(&ctx,"INC0123"),
+                   vec![SpecialEntry { description : "snow link: INC0123".to_owned(), clip : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() }]);
+        assert_eq!(special_entry(&ctx,"CHG0123"),
+                   vec![SpecialEntry { description : "snow link: CHG0123".to_owned(), clip : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() }]);
+        assert_eq!(special_entry(&ctx,"RITM0123"),
+                   vec![SpecialEntry { description : "snow link: RITM0123".to_owned(), clip : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() }]);
+        assert_eq!(special_entry(&ctx,"PRBTASK0123"),
+                   vec![SpecialEntry { description : "snow link: PRBTASK0123".to_owned(), clip : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() }]);
+        assert_eq!(special_entry(&ctx,"PRB0123"),
+                   vec![SpecialEntry { description : "snow link: PRB0123".to_owned(), clip : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() }]);
+    }
 }

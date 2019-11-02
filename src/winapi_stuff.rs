@@ -5,8 +5,9 @@ use std::sync::{self, Mutex, Arc};
 use std::sync::mpsc::{Sender, Receiver, self, channel};
 use std::collections::HashMap;
 use clipboard_win::{get_clipboard_string, set_clipboard_string};
+use gdk::Window;
 
-pub type BindHandler = Arc<dyn Fn() + Send + Sync + 'static>;
+pub type BindHandler = Arc<dyn Fn(i32) + Send + Sync + 'static>;
 pub type ClipboardHandler = Arc<dyn Fn(String) + Send + Sync + 'static>;
 
 #[allow(unused)]
@@ -79,9 +80,12 @@ impl HotkeyData {
         Self::do_it(WindowsApiEvent::SetClipboard { text : text.to_owned()});
     }
 
-    #[allow(unused)]
     pub fn get_clipboard() -> Option<String> {
         get_clipboard_string().ok()
+    }
+
+    pub fn register_hotkey( id : i32, key : Key, modifiers : Modifier, handler : BindHandler) {
+        Self::do_it(WindowsApiEvent::HotkeyRegister { id, handler, vk : key.v(), modifiers : modifiers.v()} )
     }
 
     fn init() -> HotkeyProxy {
@@ -146,7 +150,7 @@ impl HotkeyData {
                     match get_single_message() {
                         ReceivedMessage::Hotkey { id } => {
                             if let Some(handler) = handlers.get(&id) {
-                                handler();
+                                handler(id);
                             }
                         },
                         ReceivedMessage::Nothing => {},
@@ -235,6 +239,7 @@ pub enum Key {
     Control = winapi::um::winuser::VK_CONTROL as isize,
     Alt = winapi::um::winuser::VK_MENU as isize,
     Shift = winapi::um::winuser::VK_SHIFT as isize,
+    F1 = winapi::um::winuser::VK_F1 as isize,
     A = 'A' as isize,
     B = 'B' as isize,
     C = 'C' as isize,
