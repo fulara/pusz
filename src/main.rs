@@ -163,6 +163,21 @@ fn save_data_model(file : &str, model : &DataModel) {
     file.write_all(serde_json::to_string_pretty(model).expect("failed to serialize").as_bytes()).expect("couldnt dump data model.");
 }
 
+struct Query {
+    action : String,
+    query: String,
+}
+
+impl Query {
+    fn action(&self) -> &str {
+        if self.action.is_empty() {
+            "clip"
+        } else {
+            self.action()
+        }
+    }
+}
+
 struct Context {
     special_entries_builders : Vec<(regex::Regex, String)>,
 
@@ -204,9 +219,9 @@ impl Context {
         save_data_model("pusz.json", &self.model);
     }
 
-    fn find_matching_entries(&self, needle : &str) -> impl Iterator<Item = &DataEntry> {
-        let needle = needle.to_lowercase();
-        //ineff but to be improved
+    fn query(&self, query : Query) -> impl Iterator<Item = &DataEntry> {
+        //match action here.
+        let needle = query.query.to_lowercase();
         self.model.clips.iter().filter(move |e| e.text.to_ascii_lowercase().contains(&needle))
     }
 }
@@ -241,15 +256,15 @@ fn build_ui(application: &gtk::Application) {
     window.set_default_size(840, 480);
     window.set_decorated(false);
 
-    window.connect_focus_in_event(|_, event| {
+//    window.connect_focus_in_event(|_, event| {
 //        println!("gained focus.");
-        Inhibit(false)
-    } );
+//        Inhibit(false)
+//    } );
 
-    window.connect_focus_out_event(|_, event| {
+//    window.connect_focus_out_event(|_, event| {
 //        println!("lost focus.");
-        Inhibit(false)
-    } );
+//        Inhibit(false)
+//    } );
 
     let input_field = gtk::Entry::new();
 
@@ -281,7 +296,7 @@ fn build_ui(application: &gtk::Application) {
             }
 
             if let Some(text) = entry.get_text() {
-                for data_entry in ctx.borrow().find_matching_entries(&text) {
+                for data_entry in ctx.borrow().query(Query { query : text.to_string(), action : String::new() }) {
                     scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &data_entry.text));
 
                     scroll_insides.show_all();
@@ -308,8 +323,29 @@ fn build_ui(application: &gtk::Application) {
     }));
 }
 
+fn load_plugins() -> Vec<Box<dyn plugin_interface::Plugin>> {
+    let mut plugin : Box<dyn plugin_interface::Plugin> =
+        unsafe {
+            let lib = libloading::Library::new("target/debug/calc_plugin.dll").expect("failed to load");
+            let load: libloading::Symbol<plugin_interface::LoadFn> = lib.get(b"load").expect("failed to load introduce");
+            let plugin = load(plugin_interface::COMMON_INTERFACE_VERSION);
+
+            //well - we dont want to unload plugins ever.
+            ::std::mem::forget(lib);
+
+            plugin
+        }.expect("couldnt load plugin!");
+
+    vec![plugin]
+}
+
 fn main() {
-    let application = Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
+    let mut plugins = load_plugins();
+    println!("plugin is: {:?}", plugins[0].query("2+23"));
+
+    panic!("for now disable rest of the code - need to put plugin into context and use them.");
+
+    let application = Application::new(Some("pusz"), Default::default())
         .expect("failed to initialize GTK application");
 
     application.connect_activate(|app| {
