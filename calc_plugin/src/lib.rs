@@ -19,6 +19,10 @@ impl plugin_interface::Plugin for CalcPlugin {
             }
         }
     }
+
+    fn name(&self) -> &'static str {
+        "calc"
+    }
 }
 
 #[no_mangle]

@@ -12,6 +12,7 @@ pub enum PluginResult {
 
 pub trait Plugin : ::std::fmt::Debug {
     fn query(&mut self, query : &str) -> PluginResult;
+    fn name(&self) -> &'static str;
 }
 
 pub const COMMON_INTERFACE_VERSION : &'static str = "";

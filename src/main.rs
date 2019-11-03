@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::io::Write;
 use std::thread::{spawn, sleep};
 use std::time::{Duration,
                 SystemTime};
@@ -17,7 +18,7 @@ use serde::{Serialize, Deserialize};
 
 mod winapi_stuff;
 use winapi_stuff::*;
-use std::io::Write;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -182,6 +183,8 @@ struct Context {
     special_entries_builders : Vec<(regex::Regex, String)>,
 
     model : DataModel,
+
+    plugins : HashMap<String, Box<plugin_interface::Plugin>>,
 }
 
 impl Context {
@@ -196,7 +199,10 @@ impl Context {
         Self {
             model,
             special_entries_builders : r.iter().map(|(pattern, base)| (regex::Regex::new(pattern).expect(&format!("failure to build regex from {}", pattern)), base.to_string())).collect(),
+
+            plugins : load_plugins(),
         }
+
     }
 
     fn add_entry(&mut self, text : &str) {
@@ -296,11 +302,33 @@ fn build_ui(application: &gtk::Application) {
             }
 
             if let Some(text) = entry.get_text() {
-                for data_entry in ctx.borrow().query(Query { query : text.to_string(), action : String::new() }) {
-                    scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &data_entry.text));
+                let mut words = text.split_whitespace();
+                if text.starts_with("/") && words.next() == Some("/calc") {
+                    let result = if let Some(plugin) = ctx.borrow_mut().plugins.get_mut("calc") {
+                        let x : String = words.collect();
+                        plugin.query(&x)
+                    } else {
+                      panic!("unreachable");
+                    };
 
-                    scroll_insides.show_all();
+                    use plugin_interface::*;
+                    if let PluginResult::Ok(results) = result {
+                        for r in results {
+                            if let PluginResultEntry::Clip {content, label} = r {
+                                scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &content));
+                            }
+                        }
+                    }
+
+                } else {
+                    for data_entry in ctx.borrow().query(Query { query: text.to_string(), action: String::new() }) {
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &data_entry.text));
+
+
+                    }
                 }
+
+                scroll_insides.show_all();
             }
 
         });
@@ -323,7 +351,7 @@ fn build_ui(application: &gtk::Application) {
     }));
 }
 
-fn load_plugins() -> Vec<Box<dyn plugin_interface::Plugin>> {
+fn load_plugins() -> HashMap<String, Box<dyn plugin_interface::Plugin>> {
     let mut plugin : Box<dyn plugin_interface::Plugin> =
         unsafe {
             let lib = libloading::Library::new("target/debug/calc_plugin.dll").expect("failed to load");
@@ -336,16 +364,12 @@ fn load_plugins() -> Vec<Box<dyn plugin_interface::Plugin>> {
             plugin
         }.expect("couldnt load plugin!");
 
-    vec![plugin]
+    vec![plugin].into_iter().map(|p| (p.name().to_string(), p)).collect()
 }
 
 fn main() {
-    let mut plugins = load_plugins();
-    println!("plugin is: {:?}", plugins[0].query("2+23"));
-
-    panic!("for now disable rest of the code - need to put plugin into context and use them.");
-
-    let application = Application::new(Some("pusz"), Default::default())
+//    let mut plugins = load_plugins();
+    let application = Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
         .expect("failed to initialize GTK application");
 
     application.connect_activate(|app| {
