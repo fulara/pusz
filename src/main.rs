@@ -184,7 +184,7 @@ struct Context {
 
     model : DataModel,
 
-    plugins : HashMap<String, Box<plugin_interface::Plugin>>,
+    plugins : HashMap<String, Box<dyn plugin_interface::Plugin>>,
 }
 
 impl Context {
@@ -303,28 +303,29 @@ fn build_ui(application: &gtk::Application) {
 
             if let Some(text) = entry.get_text() {
                 let mut words = text.split_whitespace();
-                if text.starts_with("/") && words.next() == Some("/calc") {
-                    let result = if let Some(plugin) = ctx.borrow_mut().plugins.get_mut("calc") {
-                        let x : String = words.collect();
-                        plugin.query(&x)
+                if text.starts_with("/") {
+                    let command = &words.next().unwrap()[1..];
+                    let result = if let Some(plugin) = ctx.borrow_mut().plugins.get_mut(command) {
+                        let query : String = words.collect();
+                        plugin.query(&query)
                     } else {
-                      panic!("unreachable");
+                        // hint about what plugins are available
+                        return;
                     };
 
                     use plugin_interface::*;
                     if let PluginResult::Ok(results) = result {
                         for r in results {
-                            if let PluginResultEntry::Clip {content, label} = r {
+                            if let PluginResultEntry::Clip { content, label } = r {
                                 scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &content));
                             }
                         }
+                    } else {
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &format!("{:?}", result)));
                     }
-
                 } else {
                     for data_entry in ctx.borrow().query(Query { query: text.to_string(), action: String::new() }) {
                         scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &data_entry.text));
-
-
                     }
                 }
 

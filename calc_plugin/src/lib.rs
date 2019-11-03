@@ -27,7 +27,6 @@ impl plugin_interface::Plugin for CalcPlugin {
 
 #[no_mangle]
 pub extern "C" fn load(plugin_interface_version : &str) -> Result<Box<dyn plugin_interface::Plugin>, String> {
-    println!("loading calc");
     if plugin_interface_version == plugin_interface::COMMON_INTERFACE_VERSION {
         Ok(Box::new(CalcPlugin{}))
     } else {
