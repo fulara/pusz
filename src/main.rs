@@ -219,16 +219,24 @@ impl Context {
     }
 
     fn remove_entry(&mut self, text : &str) {
-        // need more efficient! :)
+        // need more efficient sol! :)
         self.model.clips.retain( |e| e.text != text);
 
         save_data_model("pusz.json", &self.model);
     }
 
-    fn query(&self, query : Query) -> impl Iterator<Item = &DataEntry> {
+    fn query(&self, query : Query) -> Vec<&DataEntry> {
+        use fuzzy_matcher::skim::fuzzy_match;
+        let mut matched = self.model.clips.iter().filter_map(|e| fuzzy_match(&e.text, &query.query).map(|match_score| (e, match_score))).collect::<Vec<_>>();
+
+        matched.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
+
+        matched.iter().map(|(e, ..)| *e).collect()
+
+//        fuzzy_match()
         //match action here.
-        let needle = query.query.to_lowercase();
-        self.model.clips.iter().filter(move |e| e.text.to_ascii_lowercase().contains(&needle))
+//        let needle = query.query.to_lowercase();
+//        self.model.clips.iter().filter(move |e| e.text.to_ascii_lowercase().contains(&needle))
     }
 }
 
@@ -399,5 +407,15 @@ mod model_tests {
                    vec![SpecialEntry { description : "snow link: PRBTASK0123".to_owned(), clip : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"PRB0123"),
                    vec![SpecialEntry { description : "snow link: PRB0123".to_owned(), clip : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() }]);
+    }
+
+    #[test]
+    fn fuzzy_match_showcase() {
+        use fuzzy_matcher::skim::fuzzy_match;
+
+        assert_eq!(Some(106), fuzzy_match("choice", "choice"));
+        //hm. better result than 1:1 string?
+        assert_eq!(Some(110), fuzzy_match("c-hoice", "choice"));
+        assert_eq!(Some(46), fuzzy_match("cxhxoxixcxex", "choice"));
     }
 }
