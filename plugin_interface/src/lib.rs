@@ -1,13 +1,19 @@
-#[derive(Debug)]
-pub enum PluginResultEntry {
-    Clip{label : String, content : String},
+#[derive(PartialEq, Debug)]
+pub struct Entry {
+    pub label : String,
+    pub content : String,
+}
+#[derive(PartialEq, Debug)]
+pub struct PuszDisplayRow {
+    pub main_entry : Entry,
+    pub additional_entries : Vec<Entry>,
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub enum PluginResult {
     None,
     Error(String),
-    Ok(Vec<PluginResultEntry>),
+    Ok(Vec<PuszDisplayRow>),
 }
 
 pub trait Plugin : ::std::fmt::Debug {

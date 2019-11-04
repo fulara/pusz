@@ -1,5 +1,5 @@
 use plugin_interface;
-use plugin_interface::{PluginResult, PluginResultEntry};
+use plugin_interface::{PluginResult, PuszDisplayRow, Entry};
 
 #[derive(Debug)]
 struct CalcPlugin {
@@ -11,7 +11,7 @@ impl plugin_interface::Plugin for CalcPlugin {
         match meval::eval_str(&query) {
             Ok(result) => {
                 let result = result.to_string();
-                PluginResult::Ok(vec![PluginResultEntry::Clip { label : result.clone(),  content : result}])
+                PluginResult::Ok(vec![PuszDisplayRow { main_entry : Entry { label : result.clone(),  content : result}, additional_entries : vec![], }])
             }
 
             Err(err) => {
@@ -49,10 +49,9 @@ mod tests {
     fn assert_ok_result(expression : &str, expected_result : f64) {
         let y = CalcPlugin{}.query(expression);
         if let PluginResult::Ok(result) = y {
-            if let PluginResultEntry::Clip{ content, label } = &result[0] {
-                assert_eq!(expected_result.to_string(), *content);
-                return;
-            }
+            let result = &result[0];
+            assert_eq!(expected_result.to_string(), result.main_entry.label);
+            return;
         }
 
 //        panic!("expected ok result got: {:?}", y);

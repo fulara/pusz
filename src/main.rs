@@ -19,6 +19,7 @@ use serde::{Serialize, Deserialize};
 mod winapi_stuff;
 use winapi_stuff::*;
 use std::collections::HashMap;
+use plugin_interface::{PuszDisplayRow, Entry};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -53,20 +54,14 @@ fn draw_entry_background(_window: &gtk::Box, ctx: &cairo::Context) -> Inhibit {
     Inhibit(false)
 }
 
-#[derive(PartialEq, Debug, Clone)]
-struct SpecialEntry {
-    clip : String,
-    description : String,
-}
-
-fn special_entry(ctx : &Context, text : &str) -> Vec<SpecialEntry> {
+fn special_entry(ctx : &Context, text : &str) -> Vec<Entry> {
     let mut entries = vec![];
 
     for (regex, base) in ctx.special_entries_builders.iter() {
         for cap in regex.captures_iter(text) {
-            entries.push(SpecialEntry {
-                description: format!("snow link: {}", cap[1].to_owned()),
-                clip: format!("https://ig.service-now.com/{}.do?sysparm_query=number={}", base, cap[1].to_owned()),
+            entries.push(Entry {
+                label:  format!("snow link: {}", cap[1].to_owned()),
+                content: format!("https://ig.service-now.com/{}.do?sysparm_query=number={}", base, cap[1].to_owned()),
             })
         }
     }
@@ -74,15 +69,15 @@ fn special_entry(ctx : &Context, text : &str) -> Vec<SpecialEntry> {
     entries
 }
 
-fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry,text : &str) -> gtk::Box {
+fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszDisplayRow, is_removable : bool ) -> gtk::Box {
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
-    let handler = {
-        let text = text.to_owned();
+    let main_handler = {
+        let text = row.main_entry.content.clone();
         move || { HotkeyData::set_clipboard(&text) }
     };
 
-    let handler_clone = handler.clone();
+    let handler_clone = main_handler.clone();
     container.connect_key_press_event(move |_, event_key| {
         use gdk::enums::key::*;
         #[allow(non_upper_case_globals)]
@@ -105,34 +100,36 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry,text : &str) -
 //    container.set_has_window(true); crashes app.
     container.connect_draw(draw_entry_background);
 
-    let workaround_button = gtk::Button::new_with_label(text);
+    let workaround_button = gtk::Button::new_with_label(&row.main_entry.label);
 
-    let text = text.to_owned();
     workaround_button.connect_clicked(move |_| {
-        handler();
+        main_handler();
     });
     container.add(&workaround_button);
 
-    for special_entry in special_entry(&ctx.borrow(), &text) {
-        let special_entry_button = gtk::Button::new_with_label(&special_entry.description);
-        special_entry_button.connect_clicked(move |_| {
-            HotkeyData::set_clipboard(&special_entry.clip);
+    for entry in row.additional_entries {
+        let button = gtk::Button::new_with_label(&entry.label);
+        button.connect_clicked(move |_| {
+            HotkeyData::set_clipboard(&entry.content);
         });
 
-        container.add(&special_entry_button);
+        container.add(&button);
     }
 
-    let removal_button = gtk::Button::new_with_label("X");
-    {
-        let container = container.clone();
-        container.add(&removal_button);
-        removal_button.connect_clicked(move |_| {
-            let ctx: &mut Context = &mut ctx.borrow_mut();
-            ctx.remove_entry(&text);
+    if is_removable {
+        let text = row.main_entry.label.to_string();
+        let removal_button = gtk::Button::new_with_label("X");
+        {
+            let container = container.clone();
+            container.add(&removal_button);
+            removal_button.connect_clicked(move |_| {
+                let ctx: &mut Context = &mut ctx.borrow_mut();
+                ctx.remove_entry(&text);
 
-            container.hide();
-            container.grab_focus();
-        });
+                container.hide();
+                container.grab_focus();
+            });
+        }
     }
 
     container
@@ -232,11 +229,6 @@ impl Context {
         matched.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
 
         matched.iter().map(|(e, ..)| *e).collect()
-
-//        fuzzy_match()
-        //match action here.
-//        let needle = query.query.to_lowercase();
-//        self.model.clips.iter().filter(move |e| e.text.to_ascii_lowercase().contains(&needle))
     }
 }
 
@@ -324,16 +316,22 @@ fn build_ui(application: &gtk::Application) {
                     use plugin_interface::*;
                     if let PluginResult::Ok(results) = result {
                         for r in results {
-                            if let PluginResultEntry::Clip { content, label } = r {
-                                scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &content));
-                            }
+                                scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), r, false));
                         }
                     } else {
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &format!("{:?}", result)));
+                        let err_message = format!("{:?}", result);
+                        let err_row = PuszDisplayRow {
+                            additional_entries: vec![],
+                            main_entry: Entry {
+                                label: err_message.clone(),
+                                content: err_message,
+                            }
+                        };
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), err_row, false));
                     }
                 } else {
                     for data_entry in ctx.borrow().query(Query { query: text.to_string(), action: String::new() }) {
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), &data_entry.text));
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), PuszDisplayRow { main_entry : Entry { label : data_entry.text.clone(), content : data_entry.text.clone() } , additional_entries  : special_entry(&ctx.borrow(), &data_entry.text)}, true));
                     }
                 }
 
@@ -391,6 +389,7 @@ fn main() {
 #[cfg(test)]
 mod model_tests {
     use super::*;
+    use plugin_interface::Entry;
     #[test]
     fn special_entry_snow() {
 
@@ -398,15 +397,15 @@ mod model_tests {
 
         assert_eq!(special_entry(&ctx,"invalid"), vec![]);
         assert_eq!(special_entry(&ctx,"INC0123"),
-                   vec![SpecialEntry { description : "snow link: INC0123".to_owned(), clip : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() }]);
+                   vec![Entry { label : "snow link: INC0123".to_owned(), content : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"CHG0123"),
-                   vec![SpecialEntry { description : "snow link: CHG0123".to_owned(), clip : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() }]);
+                   vec![Entry { label : "snow link: CHG0123".to_owned(), content : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"RITM0123"),
-                   vec![SpecialEntry { description : "snow link: RITM0123".to_owned(), clip : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() }]);
+                   vec![Entry { label : "snow link: RITM0123".to_owned(), content : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"PRBTASK0123"),
-                   vec![SpecialEntry { description : "snow link: PRBTASK0123".to_owned(), clip : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() }]);
+                   vec![Entry { label : "snow link: PRBTASK0123".to_owned(), content : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"PRB0123"),
-                   vec![SpecialEntry { description : "snow link: PRB0123".to_owned(), clip : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() }]);
+                   vec![Entry { label : "snow link: PRB0123".to_owned(), content : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() }]);
     }
 
     #[test]
