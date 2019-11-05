@@ -1,19 +1,38 @@
 #[derive(PartialEq, Debug)]
-pub struct Entry {
+pub struct PuszClipEntry {
     pub label : String,
     pub content : String,
 }
+
+#[derive(Debug)]
+pub struct PuszActionEntry {
+    pub label : String,
+    pub action_context : Box<dyn std::any::Any>,
+}
+
+impl ::std::cmp::PartialEq for PuszActionEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.label.eq(&other.label)
+    }
+}
+
 #[derive(PartialEq, Debug)]
-pub struct PuszDisplayRow {
-    pub main_entry : Entry,
-    pub additional_entries : Vec<Entry>,
+pub enum PuszEntry {
+    Display(PuszClipEntry),
+    Action(PuszActionEntry),
+}
+
+#[derive(PartialEq, Debug)]
+pub struct PuszRow {
+    pub main_entry : PuszClipEntry,
+    pub additional_entries : Vec<PuszEntry>,
 }
 
 #[derive(PartialEq, Debug)]
 pub enum PluginResult {
     None,
     Error(String),
-    Ok(Vec<PuszDisplayRow>),
+    Ok(Vec<PuszRow>),
 }
 
 pub trait Plugin : ::std::fmt::Debug {

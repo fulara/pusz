@@ -19,7 +19,7 @@ use serde::{Serialize, Deserialize};
 mod winapi_stuff;
 use winapi_stuff::*;
 use std::collections::HashMap;
-use plugin_interface::{PuszDisplayRow, Entry};
+use plugin_interface::{PuszRow, PuszClipEntry, PuszEntry};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -54,22 +54,22 @@ fn draw_entry_background(_window: &gtk::Box, ctx: &cairo::Context) -> Inhibit {
     Inhibit(false)
 }
 
-fn special_entry(ctx : &Context, text : &str) -> Vec<Entry> {
+fn special_entry(ctx : &Context, text : &str) -> Vec<PuszEntry> {
     let mut entries = vec![];
 
     for (regex, base) in ctx.special_entries_builders.iter() {
         for cap in regex.captures_iter(text) {
-            entries.push(Entry {
+            entries.push(PuszEntry::Display(PuszClipEntry {
                 label:  format!("snow link: {}", cap[1].to_owned()),
                 content: format!("https://ig.service-now.com/{}.do?sysparm_query=number={}", base, cap[1].to_owned()),
-            })
+            }))
         }
     }
 
     entries
 }
 
-fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszDisplayRow, is_removable : bool ) -> gtk::Box {
+fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow, is_removable : bool ) -> gtk::Box {
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
     let main_handler = {
@@ -108,12 +108,17 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszDis
     container.add(&workaround_button);
 
     for entry in row.additional_entries {
-        let button = gtk::Button::new_with_label(&entry.label);
-        button.connect_clicked(move |_| {
-            HotkeyData::set_clipboard(&entry.content);
-        });
+        match entry {
+            PuszEntry::Display(entry) => {
+                let button = gtk::Button::new_with_label(&entry.label);
+                button.connect_clicked(move |_| {
+                    HotkeyData::set_clipboard(&entry.content);
+                });
 
-        container.add(&button);
+                container.add(&button);
+            },
+            PuszEntry::Action(action) => panic!(),
+        }
     }
 
     if is_removable {
@@ -320,9 +325,9 @@ fn build_ui(application: &gtk::Application) {
                         }
                     } else {
                         let err_message = format!("{:?}", result);
-                        let err_row = PuszDisplayRow {
+                        let err_row = PuszRow {
                             additional_entries: vec![],
-                            main_entry: Entry {
+                            main_entry: PuszClipEntry {
                                 label: err_message.clone(),
                                 content: err_message,
                             }
@@ -331,7 +336,7 @@ fn build_ui(application: &gtk::Application) {
                     }
                 } else {
                     for data_entry in ctx.borrow().query(Query { query: text.to_string(), action: String::new() }) {
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), PuszDisplayRow { main_entry : Entry { label : data_entry.text.clone(), content : data_entry.text.clone() } , additional_entries  : special_entry(&ctx.borrow(), &data_entry.text)}, true));
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), PuszRow { main_entry : PuszClipEntry { label : data_entry.text.clone(), content : data_entry.text.clone() } , additional_entries  : special_entry(&ctx.borrow(), &data_entry.text)}, true));
                     }
                 }
 
@@ -359,19 +364,36 @@ fn build_ui(application: &gtk::Application) {
 }
 
 fn load_plugins() -> HashMap<String, Box<dyn plugin_interface::Plugin>> {
-    let mut plugin : Box<dyn plugin_interface::Plugin> =
+    use std::fs;
+
+    let mut dll_paths =
+    if let Ok(entries) = fs::read_dir("plugins") {
+        entries.filter_map(|e| e.ok()).filter_map(|e| e.path().into_os_string().into_string().ok()).filter(|file_name| file_name.ends_with(".dll")).collect::<Vec<_>>()
+    } else {
+        println!("couldnt read plugins dir?");
+        return HashMap::new();
+    };
+
+    //hacky solution for development purposes.
+    if std::path::Path::new("target/debug/calc_plugin.dll").exists() {
+        dll_paths.push("target/debug/calc_plugin.dll".to_string());
+    }
+
+   let mut plugins : Vec<Box<dyn plugin_interface::Plugin>> =
         unsafe {
-            let lib = libloading::Library::new("target/debug/calc_plugin.dll").expect("failed to load");
-            let load: libloading::Symbol<plugin_interface::LoadFn> = lib.get(b"load").expect("failed to load introduce");
-            let plugin = load(plugin_interface::COMMON_INTERFACE_VERSION);
+            dll_paths.into_iter().map(|dll_path| {
+                let lib = libloading::Library::new(dll_path).expect("failed to load");
+                let load: libloading::Symbol<plugin_interface::LoadFn> = lib.get(b"load").expect("failed to load introduce");
+                let plugin = load(plugin_interface::COMMON_INTERFACE_VERSION);
 
-            //well - we dont want to unload plugins ever.
-            ::std::mem::forget(lib);
+                //well - we dont want to unload plugins ever.
+                ::std::mem::forget(lib);
 
-            plugin
-        }.expect("couldnt load plugin!");
+                plugin.expect("couldnt load plugin!")
+            }).collect()
+        };
 
-    vec![plugin].into_iter().map(|p| (p.name().to_string(), p)).collect()
+    plugins.into_iter().map(|p| (p.name().to_string(), p)).collect()
 }
 
 fn main() {
@@ -389,7 +411,7 @@ fn main() {
 #[cfg(test)]
 mod model_tests {
     use super::*;
-    use plugin_interface::Entry;
+    use plugin_interface::PuszClipEntry;
     #[test]
     fn special_entry_snow() {
 
@@ -397,15 +419,15 @@ mod model_tests {
 
         assert_eq!(special_entry(&ctx,"invalid"), vec![]);
         assert_eq!(special_entry(&ctx,"INC0123"),
-                   vec![Entry { label : "snow link: INC0123".to_owned(), content : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() }]);
+                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: INC0123".to_owned(), content : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() })]);
         assert_eq!(special_entry(&ctx,"CHG0123"),
-                   vec![Entry { label : "snow link: CHG0123".to_owned(), content : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() }]);
+                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: CHG0123".to_owned(), content : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() })]);
         assert_eq!(special_entry(&ctx,"RITM0123"),
-                   vec![Entry { label : "snow link: RITM0123".to_owned(), content : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() }]);
+                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: RITM0123".to_owned(), content : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() })]);
         assert_eq!(special_entry(&ctx,"PRBTASK0123"),
-                   vec![Entry { label : "snow link: PRBTASK0123".to_owned(), content : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() }]);
+                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: PRBTASK0123".to_owned(), content : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() })]);
         assert_eq!(special_entry(&ctx,"PRB0123"),
-                   vec![Entry { label : "snow link: PRB0123".to_owned(), content : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() }]);
+                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: PRB0123".to_owned(), content : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() })]);
     }
 
     #[test]

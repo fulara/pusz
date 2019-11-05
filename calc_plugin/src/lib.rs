@@ -1,5 +1,5 @@
 use plugin_interface;
-use plugin_interface::{PluginResult, PuszDisplayRow, Entry};
+use plugin_interface::{PluginResult, PuszRow, PuszClipEntry};
 
 #[derive(Debug)]
 struct CalcPlugin {
@@ -11,7 +11,7 @@ impl plugin_interface::Plugin for CalcPlugin {
         match meval::eval_str(&query) {
             Ok(result) => {
                 let result = result.to_string();
-                PluginResult::Ok(vec![PuszDisplayRow { main_entry : Entry { label : result.clone(),  content : result}, additional_entries : vec![], }])
+                PluginResult::Ok(vec![PuszRow { main_entry : PuszClipEntry { label : result.clone(),  content : result}, additional_entries : vec![], }])
             }
 
             Err(err) => {
