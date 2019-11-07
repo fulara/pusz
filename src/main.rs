@@ -72,18 +72,15 @@ fn special_entry(ctx : &Context, text : &str) -> Vec<PuszEntry> {
 fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow, is_removable : bool ) -> gtk::Box {
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
-    let main_handler = {
-        let text = row.main_entry.content.clone();
-        move || { HotkeyData::set_clipboard(&text) }
-    };
+    let text = row.main_entry.content.clone();
 
-    let handler_clone = main_handler.clone();
+    let text_cloned = text.clone();
     container.connect_key_press_event(move |_, event_key| {
         use gdk::enums::key::*;
         #[allow(non_upper_case_globals)]
         match event_key.get_keyval() {
             Return => {
-                handler_clone();
+                HotkeyData::set_clipboard(&text_cloned);
                 Inhibit(false)
             }
             Down | Up  => {
@@ -96,14 +93,28 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
             }
         }
         });
+
     container.set_can_focus(true);
 //    container.set_has_window(true); crashes app.
     container.connect_draw(draw_entry_background);
 
     let workaround_button = gtk::Button::new_with_label(&row.main_entry.label);
 
-    workaround_button.connect_clicked(move |_| {
-        main_handler();
+    workaround_button.connect_button_press_event(move |_, event| {
+        match event.get_event_type() {
+            gdk::EventType::ButtonPress => {
+                HotkeyData::set_clipboard(&text);
+            },
+            gdk::EventType::DoubleButtonPress => {
+                if url::Url::parse(&text).is_ok() {
+                    webbrowser::open(&text);
+                }
+            }
+
+            _ => {}
+        }
+
+        Inhibit(true)
     });
     container.add(&workaround_button);
 
@@ -111,8 +122,21 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
         match entry {
             PuszEntry::Display(entry) => {
                 let button = gtk::Button::new_with_label(&entry.label);
-                button.connect_clicked(move |_| {
-                    HotkeyData::set_clipboard(&entry.content);
+                button.connect_button_press_event(move |_, event| {
+                    match event.get_event_type() {
+                        gdk::EventType::ButtonPress => {
+                            HotkeyData::set_clipboard(&entry.content);
+                        },
+                        gdk::EventType::DoubleButtonPress => {
+                            if url::Url::parse(&entry.content).is_ok() {
+                                webbrowser::open(&entry.content);
+                            }
+                        }
+
+                        _ => {}
+                    }
+
+                    Inhibit(true)
                 });
 
                 container.add(&button);
@@ -127,12 +151,14 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
         {
             let container = container.clone();
             container.add(&removal_button);
-            removal_button.connect_clicked(move |_| {
+            removal_button.connect_button_press_event(move |_, _| {
                 let ctx: &mut Context = &mut ctx.borrow_mut();
                 ctx.remove_entry(&text);
 
                 container.hide();
                 container.grab_focus();
+
+                Inhibit(true)
             });
         }
     }
@@ -300,8 +326,8 @@ fn build_ui(application: &gtk::Application) {
     window.show_all();
     {
         let ctx = Rc::clone(&ctx);
-        let if_ = input_field.clone();
-        if_.connect_changed(move |entry| {
+        let input_field = input_field.clone();
+        input_field.clone().connect_changed(move |entry| {
             for c in &scroll_insides.get_children() {
                 scroll_insides.remove(c);
             }
@@ -353,6 +379,10 @@ fn build_ui(application: &gtk::Application) {
             },
             PuszEvent::BringToFront => {
                 window.present();
+                if let Some(clip) = HotkeyData::get_clipboard() {
+                    input_field.grab_focus();
+                    input_field.emit_paste_clipboard();
+                }
             },
         }
         glib::Continue(true)
