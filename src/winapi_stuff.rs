@@ -43,16 +43,18 @@ pub enum ReceivedMessage {
 }
 
 fn get_single_message() -> ReceivedMessage {
-    use winapi::um::winuser::{LPMSG, GetMessageA, MSG, *};
+    use winapi::um::winuser::{LPMSG, GetMessageA, MSG, *, TranslateMessage, DispatchMessageA};
     use std::default::Default;
     let mut msg = Default::default();
+
+    let mut result = ReceivedMessage::Nothing;
     if unsafe { GetMessageA(&mut msg, 0 as winapi::shared::windef::HWND, 0, 0) != 0 } {
         match msg.message {
             WM_HOTKEY => {
-                return ReceivedMessage::Hotkey {id : msg.wParam as i32 };
+                result = ReceivedMessage::Hotkey {id : msg.wParam as i32 };
             }
             WM_CLIPBOARDUPDATE => {
-                return ReceivedMessage::ClipboardUpdate;
+                result = ReceivedMessage::ClipboardUpdate;
             }
             30000 => {
             }
@@ -60,9 +62,13 @@ fn get_single_message() -> ReceivedMessage {
 
             }
         }
+        unsafe {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
     }
 
-    ReceivedMessage::Nothing
+    result
 
 }
 

@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate lazy_static;
 
+#[macro_use]
+extern crate log;
+
 use std::io::Write;
 use std::thread::{spawn, sleep};
 use std::time::{Duration,
@@ -427,7 +430,17 @@ fn load_plugins() -> HashMap<String, Box<dyn plugin_interface::Plugin>> {
 }
 
 fn main() {
-//    let mut plugins = load_plugins();
+    use simplelog::*;
+    use std::fs::File;
+    CombinedLogger::init(
+        vec![
+            TermLogger::new(LevelFilter::Warn, Config::default(), TerminalMode::Mixed).unwrap(),
+            WriteLogger::new(LevelFilter::Info, Config::default(), File::create("pusz.log").unwrap()),
+        ]
+    ).unwrap();
+
+    info!("Pusz application initializing.");
+
     let application = Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
         .expect("failed to initialize GTK application");
 
