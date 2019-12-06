@@ -22,7 +22,7 @@ use serde::{Serialize, Deserialize};
 mod winapi_stuff;
 use winapi_stuff::*;
 use std::collections::HashMap;
-use plugin_interface::{PuszRow, PuszClipEntry, PuszEntry};
+use plugin_interface::{PuszRow, PuszRowBuilder, PuszRowIdentifier, PuszClipEntry, PuszEntry};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -72,7 +72,7 @@ fn special_entry(ctx : &Context, text : &str) -> Vec<PuszEntry> {
     entries
 }
 
-fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow, is_removable : bool ) -> gtk::Box {
+fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow) -> gtk::Box {
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
     let text = row.main_entry.content.clone();
@@ -148,7 +148,7 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
         }
     }
 
-    if is_removable {
+    if row.is_removable {
         let text = row.main_entry.label.to_string();
         let removal_button = gtk::Button::new_with_label("X");
         {
@@ -262,13 +262,19 @@ impl Context {
 
         matched.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
 
-        matched.iter().map(|(e, ..)| *e).collect()
+        let score_requirement = matched.first().map_or(0, |(_, score)| *score) * 0.5 as i64;
+
+        matched.iter().filter(|(_, score)| *score >= score_requirement ).map(|(e, ..)| *e).collect()
     }
 }
 
 enum PuszEvent {
     ClipboardChanged(String),
     BringToFront,
+}
+
+fn main_id() -> PuszRowIdentifier {
+    PuszRowIdentifier::MainApi
 }
 
 fn build_ui(application: &gtk::Application) {
@@ -350,22 +356,18 @@ fn build_ui(application: &gtk::Application) {
                     use plugin_interface::*;
                     if let PluginResult::Ok(results) = result {
                         for r in results {
-                                scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), r, false));
+                                scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), r));
                         }
                     } else {
                         let err_message = format!("{:?}", result);
-                        let err_row = PuszRow {
-                            additional_entries: vec![],
-                            main_entry: PuszClipEntry {
-                                label: err_message.clone(),
-                                content: err_message,
-                            }
-                        };
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), err_row, false));
+                        let err_row = PuszRowBuilder::new(err_message, main_id()).build().unwrap();
+
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), err_row));
                     }
                 } else {
                     for data_entry in ctx.borrow().query(Query { query: text.to_string(), action: String::new() }) {
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), PuszRow { main_entry : PuszClipEntry { label : data_entry.text.clone(), content : data_entry.text.clone() } , additional_entries  : special_entry(&ctx.borrow(), &data_entry.text)}, true));
+                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(),
+                                                        PuszRowBuilder::new(data_entry.text.clone(), main_id()).additional_entries(special_entry(&ctx.borrow(), &data_entry.text)).is_removable(true).build().unwrap()));
                     }
                 }
 

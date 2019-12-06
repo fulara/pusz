@@ -1,13 +1,16 @@
-#[derive(PartialEq, Debug)]
+#[macro_use]
+extern crate derive_builder;
+
+#[derive(PartialEq, Debug, Clone)]
 pub struct PuszClipEntry {
     pub label : String,
     pub content : String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PuszActionEntry {
     pub label : String,
-    pub action_context : Box<dyn std::any::Any>,
+//    pub action_context : Box<dyn std::any::Any>,
 }
 
 impl ::std::cmp::PartialEq for PuszActionEntry {
@@ -16,17 +19,47 @@ impl ::std::cmp::PartialEq for PuszActionEntry {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum PuszEntry {
     Display(PuszClipEntry),
     Action(PuszActionEntry),
 }
 
-#[derive(PartialEq, Debug)]
+//temporary until main api adopts api.
+#[derive(PartialEq, Clone, Debug)]
+pub enum PuszRowIdentifier {
+    MainApi,
+    Plugin(&'static str),
+}
+
+#[derive(PartialEq, Builder, Clone, Debug)]
 pub struct PuszRow {
     pub main_entry : PuszClipEntry,
+    #[builder(default)]
     pub additional_entries : Vec<PuszEntry>,
+
+    pub identifier : PuszRowIdentifier,
+
+    #[builder(default)]
+    pub is_removable : bool,
 }
+
+impl PuszRowBuilder {
+    pub fn new(content : String, identifier : PuszRowIdentifier) -> PuszRowBuilder {
+        PuszRowBuilder {
+            main_entry : Some(PuszClipEntry {
+                label : content.clone(),
+                content,
+            }),
+            additional_entries : None,
+            identifier : Some(identifier),
+
+            is_removable : None,
+
+        }
+    }
+}
+
 
 #[derive(PartialEq, Debug)]
 pub enum PluginResult {
@@ -37,10 +70,18 @@ pub enum PluginResult {
 
 pub trait Plugin : ::std::fmt::Debug {
     fn query(&mut self, query : &str) -> PluginResult;
+    //invoked on pressing return
+    fn action_request(&mut self, query : &str) -> PluginResult {
+        self.query(query)
+    }
     fn name(&self) -> &'static str;
+
+    fn id(&self) -> PuszRowIdentifier {
+        PuszRowIdentifier::Plugin(self.name())
+    }
 }
 
-pub const COMMON_INTERFACE_VERSION : &'static str = "";
+pub const COMMON_INTERFACE_VERSION : &'static str = "1";
 pub type LoadFn = extern "C" fn(&str) -> Result<Box<dyn Plugin>, String>;
 
 #[no_mangle]
