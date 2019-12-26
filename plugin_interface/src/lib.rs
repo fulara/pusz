@@ -68,6 +68,18 @@ pub enum PluginResult {
     Ok(Vec<PuszRow>),
 }
 
+#[derive(PartialEq, Debug)]
+pub struct PluginSettings {
+    pub requies_explicit_query : bool,
+    pub interested_in_clipboard : bool,
+}
+
+#[derive(PartialEq, Debug)]
+// should this be renamed to voluntary/subscribed event?
+pub enum PluginEvent {
+    Clipboard(String), // images'n stuff in the future
+}
+
 pub trait Plugin : ::std::fmt::Debug {
     fn query(&mut self, query : &str) -> PluginResult;
     //invoked on pressing return
@@ -78,6 +90,17 @@ pub trait Plugin : ::std::fmt::Debug {
 
     fn id(&self) -> PuszRowIdentifier {
         PuszRowIdentifier::Plugin(self.name())
+    }
+
+    fn settings(&self) -> PluginSettings {
+        PluginSettings {
+            requies_explicit_query : true,
+            interested_in_clipboard : false,
+        }
+    }
+
+    fn on_subscribed_event(&mut self, _event : &PluginEvent) {
+        ()
     }
 }
 

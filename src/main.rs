@@ -22,7 +22,13 @@ use serde::{Serialize, Deserialize};
 mod winapi_stuff;
 use winapi_stuff::*;
 use std::collections::HashMap;
-use plugin_interface::{PuszRow, PuszRowBuilder, PuszRowIdentifier, PuszClipEntry, PuszEntry};
+use plugin_interface::{PuszRow,
+                       PuszRowBuilder,
+                       PuszRowIdentifier,
+                       PuszClipEntry,
+                       PuszEntry,
+                       PluginEvent,
+                      };
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -169,32 +175,6 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
     container
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DataEntry {
-    text : String,
-    last_use_timestamp : SystemTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct DataModel {
-    clips : Vec<DataEntry>
-}
-
-fn load_data_model(file : &str) -> DataModel {
-    use std::fs;
-
-    let contents = fs::read_to_string(file).unwrap_or_default();
-
-    serde_json::from_str(&contents).unwrap_or_default()
-}
-
-fn save_data_model(file : &str, model : &DataModel) {
-    use std::fs::File;
-
-    let mut file = File::create(file).expect("couldnt create a file.");
-    file.write_all(serde_json::to_string_pretty(model).expect("failed to serialize").as_bytes()).expect("couldnt dump data model.");
-}
-
 struct Query {
     action : String,
     query: String,
@@ -213,58 +193,30 @@ impl Query {
 struct Context {
     special_entries_builders : Vec<(regex::Regex, String)>,
 
-    model : DataModel,
-
     plugins : HashMap<String, Box<dyn plugin_interface::Plugin>>,
 }
 
 impl Context {
-    fn new(model : DataModel) -> Self {
+    fn new() -> Self {
         let r = [(r"(INC\d{4,})", "incident"),
             (r"(RITM\d{4,})", "sc_req_item"),
             (r"(CHG\d{4,})", "change_request"),
             (r"(PRB\d{4,})", "problem")
-            ,(r"(PRBTASK\d{4,})", "problem_task")];
+            , (r"(PRBTASK\d{4,})", "problem_task")];
 
 
         Self {
-            model,
-            special_entries_builders : r.iter().map(|(pattern, base)| (regex::Regex::new(pattern).expect(&format!("failure to build regex from {}", pattern)), base.to_string())).collect(),
+            special_entries_builders: r.iter().map(|(pattern, base)| (regex::Regex::new(pattern).expect(&format!("failure to build regex from {}", pattern)), base.to_string())).collect(),
 
-            plugins : load_plugins(),
+            plugins: load_plugins(),
         }
-
     }
 
-    fn add_entry(&mut self, text : &str) {
-        for e in &mut self.model.clips {
-            if e.text == text {
-                e.last_use_timestamp = SystemTime::now();
-                return;
-            }
-        }
-
-        self.model.clips.push(DataEntry {text : text.to_owned(), last_use_timestamp : SystemTime::now() });
-
-        save_data_model("pusz.json", &self.model);
-    }
-
-    fn remove_entry(&mut self, text : &str) {
+    fn remove_entry(&mut self, text: &str) {
         // need more efficient sol! :)
-        self.model.clips.retain( |e| e.text != text);
+//        self.model.clips.retain( |e| e.text != text);
 
-        save_data_model("pusz.json", &self.model);
-    }
-
-    fn query(&self, query : Query) -> Vec<&DataEntry> {
-        use fuzzy_matcher::skim::fuzzy_match;
-        let mut matched = self.model.clips.iter().filter_map(|e| fuzzy_match(&e.text, &query.query).map(|match_score| (e, match_score))).collect::<Vec<_>>();
-
-        matched.sort_by(|(_, score_a), (_, score_b)| score_b.cmp(score_a));
-
-        let score_requirement = matched.first().map_or(0, |(_, score)| *score) * 0.5 as i64;
-
-        matched.iter().filter(|(_, score)| *score >= score_requirement ).map(|(e, ..)| *e).collect()
+//        save_data_model("pusz.json", &self.model);
     }
 }
 
@@ -278,7 +230,7 @@ fn main_id() -> PuszRowIdentifier {
 }
 
 fn build_ui(application: &gtk::Application) {
-    let ctx = Rc::new(RefCell::new(Context::new(load_data_model("pusz.json"))));
+    let ctx = Rc::new(RefCell::new(Context::new()));
 
     let window = gtk::ApplicationWindow::new(application);
     window.connect_screen_changed(set_visual);
@@ -343,44 +295,55 @@ fn build_ui(application: &gtk::Application) {
 
             if let Some(text) = entry.get_text() {
                 let mut words = text.split_whitespace();
-                if text.starts_with("/") {
+                let (query, command) = if text.starts_with("/") {
                     let command = &words.next().unwrap()[1..];
-                    let result = if let Some(plugin) = ctx.borrow_mut().plugins.get_mut(command) {
-                        let query : String = words.collect();
-                        plugin.query(&query)
-                    } else {
-                        // hint about what plugins are available
-                        return;
-                    };
+                    let query: String = words.collect();
 
-                    use plugin_interface::*;
+                    (query, Some(command))
+                } else {
+                    (text.to_string(), None)
+                };
+
+                //would current borrowck allow me to store plugins into vec rather than doing the below abom?
+
+                let results: Vec<PluginResult> =
+                    ctx.borrow_mut()
+                        .plugins
+                        .iter_mut()
+                        .filter(|(name, plugin)| Some(plugin.name()) == command || !plugin.settings().requies_explicit_query)
+                        .map(|(_name, plugin)| {
+                    plugin.query(&query)
+                    // hint about what plugins are available
+                }).collect();
+
+                use plugin_interface::*;
+                // better handle a case where nothing matches.
+//                    if results.is_empty() {
+//                        let err_message = format!("{:?}", result);
+//                        let err_row = PuszRowBuilder::new(err_message, main_id()).build().unwrap();
+//
+//                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), err_row));
+//                    } else {
+                for result in results {
                     if let PluginResult::Ok(results) = result {
                         for r in results {
-                                scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), r));
+                            scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), r));
                         }
-                    } else {
-                        let err_message = format!("{:?}", result);
-                        let err_row = PuszRowBuilder::new(err_message, main_id()).build().unwrap();
-
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(), err_row));
-                    }
-                } else {
-                    for data_entry in ctx.borrow().query(Query { query: text.to_string(), action: String::new() }) {
-                        scroll_insides.add(&spawn_entry(ctx.clone(), input_field.clone(),
-                                                        PuszRowBuilder::new(data_entry.text.clone(), main_id()).additional_entries(special_entry(&ctx.borrow(), &data_entry.text)).is_removable(true).build().unwrap()));
                     }
                 }
-
-                scroll_insides.show_all();
             }
-
+            scroll_insides.show_all();
         });
     }
 
     rx.attach(None, move |event| {
         match event {
             PuszEvent::ClipboardChanged(clipboard) => {
-                            ctx.borrow_mut().add_entry(&clipboard);
+                for (_, plugin) in ctx.borrow_mut().plugins.iter_mut() {
+                    if plugin.settings().interested_in_clipboard {
+                        plugin.on_subscribed_event(&PluginEvent::Clipboard(clipboard.clone()));
+                    }
+                }
             },
             PuszEvent::BringToFront => {
                 window.present();
@@ -412,6 +375,10 @@ fn load_plugins() -> HashMap<String, Box<dyn plugin_interface::Plugin>> {
     //hacky solution for development purposes.
     if std::path::Path::new("target/debug/calc_plugin.dll").exists() {
         dll_paths.push("target/debug/calc_plugin.dll".to_string());
+    }
+
+    if std::path::Path::new("target/debug/clipboard_plugin.dll").exists() {
+        dll_paths.push("target/debug/clipboard_plugin.dll".to_string());
     }
 
    let mut plugins : Vec<Box<dyn plugin_interface::Plugin>> =
@@ -460,7 +427,7 @@ mod model_tests {
     #[test]
     fn special_entry_snow() {
 
-        let ctx = Context::new(DataModel { clips : vec![]});
+        let ctx = Context::new();
 
         assert_eq!(special_entry(&ctx,"invalid"), vec![]);
         assert_eq!(special_entry(&ctx,"INC0123"),

@@ -9,6 +9,7 @@ members = [
   "pusz_common",
   "plugin_interface",
   "calc_plugin",
+  "clipboard_plugin",
 ]
 
 [dependencies]
