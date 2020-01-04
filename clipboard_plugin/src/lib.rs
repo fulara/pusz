@@ -5,7 +5,7 @@ use std::io::Write;
 use serde::{Serialize, Deserialize};
 
 use plugin_interface;
-use plugin_interface::{PluginResult, PuszRow, PuszRowBuilder, PuszRowIdentifier, PuszClipEntry, PluginEvent, PluginSettings};
+use plugin_interface::{PluginResult, PuszRow, PuszRowBuilder, PuszRowIdentifier, PluginEvent, PluginSettings};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DataEntry {
@@ -64,10 +64,15 @@ impl plugin_interface::Plugin for ClipboardPlugin {
 
         ;
         let results : Vec<_> = matched.iter().filter(|(_, score)| *score >= score_requirement ).map(|(e, ..)| *e).map(| de : &DataEntry| {
-            PuszRowBuilder::new(de.text.clone(), PuszRowIdentifier::Plugin(self.name())).build().unwrap()
+            PuszRowBuilder::new(de.text.clone(), PuszRowIdentifier::new(self.name())).build().unwrap()
         }).collect();
 
         PluginResult::Ok(results)
+    }
+
+    fn query_return(&mut self, query : &str) -> PluginResult {
+        println!("clipboard got return query.");
+        PluginResult::None
     }
 
     fn name(&self) -> &'static str {

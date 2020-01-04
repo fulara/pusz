@@ -1,5 +1,5 @@
 use plugin_interface;
-use plugin_interface::{PluginResult, PuszRow, PuszRowBuilder, PuszClipEntry};
+use plugin_interface::{PluginResult, PuszRow, PuszRowIdentifier, PuszRowBuilder};
 
 #[derive(Debug)]
 struct CalcPlugin {
@@ -11,7 +11,7 @@ impl plugin_interface::Plugin for CalcPlugin {
         match meval::eval_str(&query) {
             Ok(result) => {
                 let result = result.to_string();
-                PluginResult::Ok(vec![PuszRowBuilder::new(result, self.id()).build().unwrap()])
+                PluginResult::Ok(vec![PuszRowBuilder::new(result, PuszRowIdentifier::new(self.name())).build().unwrap()])
             }
 
             Err(err) => {

@@ -8,3 +8,5 @@ edition = "2018"
 
 [dependencies]
 derive_builder = "0.9.0"
+
+maplit = "1"

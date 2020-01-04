@@ -4,6 +4,9 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
+#[macro_use]
+extern crate maplit;
+
 use std::io::Write;
 use std::thread::{spawn, sleep};
 use std::time::{Duration,
@@ -25,7 +28,8 @@ use std::collections::HashMap;
 use plugin_interface::{PuszRow,
                        PuszRowBuilder,
                        PuszRowIdentifier,
-                       PuszClipEntry,
+                       PuszAction,
+                       PuszEvent,
                        PuszEntry,
                        PluginEvent,
                       };
@@ -68,10 +72,11 @@ fn special_entry(ctx : &Context, text : &str) -> Vec<PuszEntry> {
 
     for (regex, base) in ctx.special_entries_builders.iter() {
         for cap in regex.captures_iter(text) {
-            entries.push(PuszEntry::Display(PuszClipEntry {
+            entries.push(PuszEntry {
+                actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard),
                 label:  format!("snow link: {}", cap[1].to_owned()),
                 content: format!("https://ig.service-now.com/{}.do?sysparm_query=number={}", base, cap[1].to_owned()),
-            }))
+            })
         }
     }
 
@@ -84,11 +89,18 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
     let text = row.main_entry.content.clone();
 
     let text_cloned = text.clone();
+    let ctx_clone = ctx.clone();
+    let row_clone = row.clone();
     container.connect_key_press_event(move |_, event_key| {
         use gdk::enums::key::*;
         #[allow(non_upper_case_globals)]
         match event_key.get_keyval() {
             Return => {
+                //TODO: needs reworking hard!
+                let ctx : &mut Context = &mut ctx_clone.borrow_mut();
+                if let Some(plugin) = ctx.plugins.get_mut(row_clone.identifier.plugin_id) {
+                    plugin.query_return(&row_clone.main_entry.content);
+                }
                 HotkeyData::set_clipboard(&text_cloned);
                 Inhibit(false)
             }
@@ -128,30 +140,26 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
     container.add(&workaround_button);
 
     for entry in row.additional_entries {
-        match entry {
-            PuszEntry::Display(entry) => {
-                let button = gtk::Button::new_with_label(&entry.label);
-                button.connect_button_press_event(move |_, event| {
-                    match event.get_event_type() {
-                        gdk::EventType::ButtonPress => {
-                            HotkeyData::set_clipboard(&entry.content);
-                        },
-                        gdk::EventType::DoubleButtonPress => {
-                            if url::Url::parse(&entry.content).is_ok() {
-                                webbrowser::open(&entry.content);
-                            }
-                        }
-
-                        _ => {}
+        let button = gtk::Button::new_with_label(&entry.label);
+        button.connect_button_press_event(move |_, event| {
+            match event.get_event_type() {
+                gdk::EventType::ButtonPress => {
+                    //TODO: handle on actions;
+                    HotkeyData::set_clipboard(&entry.content);
+                },
+                gdk::EventType::DoubleButtonPress => {
+                    if url::Url::parse(&entry.content).is_ok() {
+                        webbrowser::open(&entry.content);
                     }
+                }
 
-                    Inhibit(true)
-                });
+                _ => {}
+            }
 
-                container.add(&button);
-            },
-            PuszEntry::Action(action) => panic!(),
-        }
+            Inhibit(true)
+        });
+
+        container.add(&button);
     }
 
     if row.is_removable {
@@ -220,13 +228,9 @@ impl Context {
     }
 }
 
-enum PuszEvent {
+enum PuszInternalEvent {
     ClipboardChanged(String),
     BringToFront,
-}
-
-fn main_id() -> PuszRowIdentifier {
-    PuszRowIdentifier::MainApi
 }
 
 fn build_ui(application: &gtk::Application) {
@@ -242,7 +246,7 @@ fn build_ui(application: &gtk::Application) {
         let tx = tx.clone();
         HotkeyData::do_it(WindowsApiEvent::AddClipboardListener {
             handler: Arc::new(move |clip| {
-                tx.send(PuszEvent::ClipboardChanged(clip)).expect("send failure");
+                tx.send(PuszInternalEvent::ClipboardChanged(clip)).expect("send failure");
             }
             )
         });
@@ -288,6 +292,21 @@ fn build_ui(application: &gtk::Application) {
     {
         let ctx = Rc::clone(&ctx);
         let input_field = input_field.clone();
+        input_field.clone().connect_key_press_event(move |_, event_key| {
+            use gdk::enums::key::*;
+            #[allow(non_upper_case_globals)]
+                match event_key.get_keyval() {
+                Return => {
+                    //TODO: so what we need to do here is we need to have an ability to know  which entry is the first one upon pressing enter
+                    //alternatively we just pass this to plugin - but which plugin? without /command to no plugin? with command to specific plugin.
+                    println!("key pressed on main focus");
+                    Inhibit(false)
+                }
+                _ => {
+                    Inhibit(false)
+                }
+            }
+        });
         input_field.clone().connect_changed(move |entry| {
             for c in &scroll_insides.get_children() {
                 scroll_insides.remove(c);
@@ -338,14 +357,14 @@ fn build_ui(application: &gtk::Application) {
 
     rx.attach(None, move |event| {
         match event {
-            PuszEvent::ClipboardChanged(clipboard) => {
+            PuszInternalEvent::ClipboardChanged(clipboard) => {
                 for (_, plugin) in ctx.borrow_mut().plugins.iter_mut() {
                     if plugin.settings().interested_in_clipboard {
                         plugin.on_subscribed_event(&PluginEvent::Clipboard(clipboard.clone()));
                     }
                 }
             },
-            PuszEvent::BringToFront => {
+            PuszInternalEvent::BringToFront => {
                 window.present();
                 if let Some(clip) = HotkeyData::get_clipboard() {
                     input_field.grab_focus();
@@ -357,7 +376,7 @@ fn build_ui(application: &gtk::Application) {
     });
 
     HotkeyData::register_hotkey(13, winapi_stuff::Key::F1, Modifier::None, Arc::new(move |_| {
-        tx.send(PuszEvent::BringToFront).unwrap();
+        tx.send(PuszInternalEvent::BringToFront).unwrap();
     }));
 }
 
@@ -423,7 +442,6 @@ fn main() {
 #[cfg(test)]
 mod model_tests {
     use super::*;
-    use plugin_interface::PuszClipEntry;
     #[test]
     fn special_entry_snow() {
 
@@ -431,15 +449,15 @@ mod model_tests {
 
         assert_eq!(special_entry(&ctx,"invalid"), vec![]);
         assert_eq!(special_entry(&ctx,"INC0123"),
-                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: INC0123".to_owned(), content : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() })]);
+                   vec![PuszEntry { actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard), label : "snow link: INC0123".to_owned(), content : "https://ig.service-now.com/incident.do?sysparm_query=number=INC0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"CHG0123"),
-                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: CHG0123".to_owned(), content : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() })]);
+                   vec![PuszEntry { actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard),  label : "snow link: CHG0123".to_owned(), content : "https://ig.service-now.com/change_request.do?sysparm_query=number=CHG0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"RITM0123"),
-                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: RITM0123".to_owned(), content : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() })]);
+                   vec![PuszEntry { actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard),  label : "snow link: RITM0123".to_owned(), content : "https://ig.service-now.com/sc_req_item.do?sysparm_query=number=RITM0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"PRBTASK0123"),
-                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: PRBTASK0123".to_owned(), content : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() })]);
+                   vec![PuszEntry { actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard),  label : "snow link: PRBTASK0123".to_owned(), content : "https://ig.service-now.com/problem_task.do?sysparm_query=number=PRBTASK0123".to_owned() }]);
         assert_eq!(special_entry(&ctx,"PRB0123"),
-                   vec![PuszEntry::Display(PuszClipEntry { label : "snow link: PRB0123".to_owned(), content : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() })]);
+                   vec![PuszEntry { actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard),  label : "snow link: PRB0123".to_owned(), content : "https://ig.service-now.com/problem.do?sysparm_query=number=PRB0123".to_owned() }]);
     }
 
     #[test]

@@ -1,53 +1,76 @@
 #[macro_use]
 extern crate derive_builder;
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct PuszClipEntry {
-    pub label : String,
-    pub content : String,
+#[macro_use]
+extern crate maplit;
+
+use std::any::Any;
+use std::collections::BTreeMap;
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct PuszRowIdentifier {
+    pub plugin_id : &'static str,
+
+    //optional data identifier, leave empty string if you dont want this.
+    // unfortunatelly due to limitation of the language Any derivative cant be here.
+    // ideally this would be something like Box<Any + Clone> but that is not possible.
+    // if you want to store custom structs here just ser/de them.
+    pub data_identifier : String,
 }
 
-#[derive(Debug, Clone)]
-pub struct PuszActionEntry {
-    pub label : String,
-//    pub action_context : Box<dyn std::any::Any>,
-}
-
-impl ::std::cmp::PartialEq for PuszActionEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.label.eq(&other.label)
+impl PuszRowIdentifier {
+    pub fn new(id : &'static str) -> Self {
+        Self {
+            plugin_id : id,
+            data_identifier : String::new(),
+        }
     }
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum PuszEntry {
-    Display(PuszClipEntry),
-    Action(PuszActionEntry),
+pub enum PuszAction {
+    SetClipboard,
+    OpenBrowserIfLink,
+    CustomAction,
 }
 
-//temporary until main api adopts api.
+#[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord)]
+pub enum SpecialKey {
+    Return,
+}
+
+#[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord)]
+pub enum PuszEvent {
+    Click,
+    DoubleClick,
+    SpecialKeyPress(SpecialKey),
+    //CompountAction(Vec<PuszEvent>) ?
+}
+
 #[derive(PartialEq, Clone, Debug)]
-pub enum PuszRowIdentifier {
-    MainApi,
-    Plugin(&'static str),
+pub struct PuszEntry {
+    // TODO: consider having multiple actions?
+    pub actions : BTreeMap<PuszEvent, PuszAction>,
+    pub label : String,
+    pub content : String,
 }
 
-#[derive(PartialEq, Builder, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Builder)]
 pub struct PuszRow {
-    pub main_entry : PuszClipEntry,
+    pub main_entry : PuszEntry,
+
     #[builder(default)]
     pub additional_entries : Vec<PuszEntry>,
 
     pub identifier : PuszRowIdentifier,
-
-    #[builder(default)]
     pub is_removable : bool,
 }
 
 impl PuszRowBuilder {
     pub fn new(content : String, identifier : PuszRowIdentifier) -> PuszRowBuilder {
         PuszRowBuilder {
-            main_entry : Some(PuszClipEntry {
+            main_entry : Some(PuszEntry {
+                actions : btreemap!(PuszEvent::Click => PuszAction::SetClipboard),
                 label : content.clone(),
                 content,
             }),
@@ -82,15 +105,19 @@ pub enum PluginEvent {
 
 pub trait Plugin : ::std::fmt::Debug {
     fn query(&mut self, query : &str) -> PluginResult;
+    fn query_return(&mut self, query: &str) -> PluginResult {
+        self.query(query)
+    }
+
     //invoked on pressing return
     fn action_request(&mut self, query : &str) -> PluginResult {
         self.query(query)
     }
     fn name(&self) -> &'static str;
 
-    fn id(&self) -> PuszRowIdentifier {
-        PuszRowIdentifier::Plugin(self.name())
-    }
+//    fn id(&self) -> PuszRowIdentifier {
+//        PuszRowIdentifier::Plugin(self.name())
+//    }
 
     fn settings(&self) -> PluginSettings {
         PluginSettings {
