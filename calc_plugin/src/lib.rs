@@ -11,7 +11,7 @@ impl plugin_interface::Plugin for CalcPlugin {
         match meval::eval_str(&query) {
             Ok(result) => {
                 let result = result.to_string();
-                PluginResult::Ok(vec![PuszRowBuilder::new(result, PuszRowIdentifier::new(self.name())).build().unwrap()])
+                PluginResult::Ok(vec![PuszRowBuilder::new(result, PuszRowIdentifier::new(self.name(), String::new())).build().unwrap()])
             }
 
             Err(err) => {

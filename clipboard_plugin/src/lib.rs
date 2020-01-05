@@ -64,7 +64,7 @@ impl plugin_interface::Plugin for ClipboardPlugin {
 
         ;
         let results : Vec<_> = matched.iter().filter(|(_, score)| *score >= score_requirement ).map(|(e, ..)| *e).map(| de : &DataEntry| {
-            PuszRowBuilder::new(de.text.clone(), PuszRowIdentifier::new(self.name())).build().unwrap()
+            PuszRowBuilder::new(de.text.clone(), PuszRowIdentifier::new(self.name(), de.text.clone())).build().unwrap()
         }).collect();
 
         PluginResult::Ok(results)

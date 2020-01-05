@@ -25,14 +25,8 @@ use serde::{Serialize, Deserialize};
 mod winapi_stuff;
 use winapi_stuff::*;
 use std::collections::HashMap;
-use plugin_interface::{PuszRow,
-                       PuszRowBuilder,
-                       PuszRowIdentifier,
-                       PuszAction,
-                       PuszEvent,
-                       PuszEntry,
-                       PluginEvent,
-                      };
+use plugin_interface::{PuszRow, PuszRowBuilder, PuszRowIdentifier, PuszAction, PuszEvent, PuszEntry, PluginEvent, SpecialKey};
+use crate::winapi_stuff::ReceivedMessage::Hotkey;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Model {
@@ -83,6 +77,53 @@ fn special_entry(ctx : &Context, text : &str) -> Vec<PuszEntry> {
     entries
 }
 
+
+//okay gdk_event may not make sense - how to pass on keystrokes here? for now single return is sent as DAMAGE :)
+fn handle_action(gdk_event: gdk::EventType, entry : &PuszEntry, plugins : &mut HashMap<String, Box<dyn plugin_interface::Plugin>>) -> Inhibit {
+    let action = match gdk_event {
+        gdk::EventType::ButtonPress => {
+            if let Some(action) = entry.actions.get(&PuszEvent::Click) {
+                action
+            } else {
+                return Inhibit(false);
+            }
+        }
+
+        gdk::EventType::Damage => {
+            //fake out return lul.
+            if let Some(action) = entry.actions.get(&PuszEvent::SpecialKeyPress(SpecialKey::Return)) {
+                action
+            } else {
+                return Inhibit(false);
+            }
+        }
+        _ => {
+            return Inhibit(false);
+        }
+    };
+
+    match action {
+        PuszAction::SetClipboard => {
+            HotkeyData::set_clipboard(&entry.content);
+
+            Inhibit(true)
+        },
+        PuszAction::OpenBrowserIfLink => {
+            if url::Url::parse(&entry.content).is_ok() {
+                webbrowser::open(&entry.content);
+            }
+
+            Inhibit(true)
+        },
+        PuszAction::CustomAction => {
+            panic!("custom action");
+
+            //this inhibit depends on the plugin result.
+            Inhibit(false)
+        },
+    }
+}
+
 fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow) -> gtk::Box {
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
@@ -90,18 +131,17 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
 
     let text_cloned = text.clone();
     let ctx_clone = ctx.clone();
-    let row_clone = row.clone();
+    let main_entry_clone = row.main_entry.clone();
     container.connect_key_press_event(move |_, event_key| {
         use gdk::enums::key::*;
         #[allow(non_upper_case_globals)]
         match event_key.get_keyval() {
             Return => {
-                //TODO: needs reworking hard!
                 let ctx : &mut Context = &mut ctx_clone.borrow_mut();
-                if let Some(plugin) = ctx.plugins.get_mut(row_clone.identifier.plugin_id) {
-                    plugin.query_return(&row_clone.main_entry.content);
-                }
-                HotkeyData::set_clipboard(&text_cloned);
+                handle_action(gdk::EventType::ButtonPress, &main_entry_clone, &mut ctx.plugins);
+                //we are doing buttonpress and return at the same time.. temporarly(?)
+                handle_action(gdk::EventType::Damage, &main_entry_clone, &mut ctx.plugins);
+
                 Inhibit(false)
             }
             Down | Up  => {
@@ -119,66 +159,38 @@ fn spawn_entry(ctx : Rc<RefCell<Context>>, main_edit : gtk::Entry, row : PuszRow
 //    container.set_has_window(true); crashes app.
     container.connect_draw(draw_entry_background);
 
-    let workaround_button = gtk::Button::new_with_label(&row.main_entry.label);
+    //this could be a function a row.. but not really as it would consume whole row.
+    let mut entries = row.additional_entries;
+    entries.insert(0, row.main_entry);
 
-    workaround_button.connect_button_press_event(move |_, event| {
-        match event.get_event_type() {
-            gdk::EventType::ButtonPress => {
-                HotkeyData::set_clipboard(&text);
-            },
-            gdk::EventType::DoubleButtonPress => {
-                if url::Url::parse(&text).is_ok() {
-                    webbrowser::open(&text);
-                }
-            }
-
-            _ => {}
-        }
-
-        Inhibit(true)
-    });
-    container.add(&workaround_button);
-
-    for entry in row.additional_entries {
+    for entry in entries {
         let button = gtk::Button::new_with_label(&entry.label);
+        let ctx = ctx.clone();
         button.connect_button_press_event(move |_, event| {
-            match event.get_event_type() {
-                gdk::EventType::ButtonPress => {
-                    //TODO: handle on actions;
-                    HotkeyData::set_clipboard(&entry.content);
-                },
-                gdk::EventType::DoubleButtonPress => {
-                    if url::Url::parse(&entry.content).is_ok() {
-                        webbrowser::open(&entry.content);
-                    }
-                }
-
-                _ => {}
-            }
-
-            Inhibit(true)
+            let ctx: &mut Context = &mut ctx.borrow_mut();
+            handle_action(event.get_event_type(), &entry, &mut ctx.plugins)
         });
 
         container.add(&button);
     }
 
-    if row.is_removable {
-        let text = row.main_entry.label.to_string();
-        let removal_button = gtk::Button::new_with_label("X");
-        {
-            let container = container.clone();
-            container.add(&removal_button);
-            removal_button.connect_button_press_event(move |_, _| {
-                let ctx: &mut Context = &mut ctx.borrow_mut();
-                ctx.remove_entry(&text);
-
-                container.hide();
-                container.grab_focus();
-
-                Inhibit(true)
-            });
-        }
-    }
+//    if row.is_removable {
+//        let removal_button = gtk::Button::new_with_label("X");
+//        {
+//            let container = container.clone();
+//            container.add(&removal_button);
+//            removal_button.connect_button_press_event(move |_, _| {
+//                let ctx: &mut Context = &mut ctx.borrow_mut();
+//                // plugin ask to remove.
+////                ctx.remove_entry(&text);
+//
+//                container.hide();
+//                container.grab_focus();
+//
+//                Inhibit(true)
+//            });
+//        }
+//    }
 
     container
 }

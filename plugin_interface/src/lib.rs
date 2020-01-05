@@ -11,18 +11,16 @@ use std::collections::BTreeMap;
 pub struct PuszRowIdentifier {
     pub plugin_id : &'static str,
 
-    //optional data identifier, leave empty string if you dont want this.
-    // unfortunatelly due to limitation of the language Any derivative cant be here.
-    // ideally this would be something like Box<Any + Clone> but that is not possible.
-    // if you want to store custom structs here just ser/de them.
-    pub data_identifier : String,
+    pub identifier :  String,
+    pub data : Option<String>,
 }
 
 impl PuszRowIdentifier {
-    pub fn new(id : &'static str) -> Self {
+    pub fn new(plugin_id : &'static str, identifier : String) -> Self {
         Self {
-            plugin_id : id,
-            data_identifier : String::new(),
+            plugin_id,
+            identifier,
+            data : None,
         }
     }
 }
@@ -55,6 +53,7 @@ pub struct PuszEntry {
     pub content : String,
 }
 
+//already had panics unexpected due to builder, eh purge it out?
 #[derive(PartialEq, Clone, Debug, Builder)]
 pub struct PuszRow {
     pub main_entry : PuszEntry,
@@ -77,7 +76,7 @@ impl PuszRowBuilder {
             additional_entries : None,
             identifier : Some(identifier),
 
-            is_removable : None,
+            is_removable : Some(false),
 
         }
     }

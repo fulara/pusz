@@ -40,6 +40,8 @@ clipboard-win = "2.2.0"
 
 maplit = "1"
 
+toml = "0.5"
+
 cairo-rs = { version = "^0", features = ["png"] }
 [dependencies.gtk]
 version = "0.7.0"
