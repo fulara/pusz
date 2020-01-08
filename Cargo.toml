@@ -10,6 +10,7 @@ members = [
   "plugin_interface",
   "calc_plugin",
   "clipboard_plugin",
+  "store_plugin",
 ]
 
 [dependencies]
