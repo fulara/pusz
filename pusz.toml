@@ -1,0 +1,41 @@
+[[clips]]
+text = 'abc'
+
+[clips.last_use_timestamp]
+secs_since_epoch = 1578350608
+nanos_since_epoch = 972654400
+
+[[clips]]
+text = 'potato'
+
+[clips.last_use_timestamp]
+secs_since_epoch = 1578350717
+nanos_since_epoch = 530404400
+
+[[clips]]
+text = 'https://www.ingturbo.pl/rynki/indeksy/s-p-500/page/1'
+
+[clips.last_use_timestamp]
+secs_since_epoch = 1578350855
+nanos_since_epoch = 827206600
+
+[[clips]]
+text = 'The Rising of the Shield Hero'
+
+[clips.last_use_timestamp]
+secs_since_epoch = 1578351375
+nanos_since_epoch = 659653500
+
+[[clips]]
+text = 'no ludzie co wymyslaja jak to bedzie pakowane nie przeczytali tutoriala do conana'
+
+[clips.last_use_timestamp]
+secs_since_epoch = 1578351744
+nanos_since_epoch = 932563500
+
+[[clips]]
+text = 'gggg'
+
+[clips.last_use_timestamp]
+secs_since_epoch = 1578352921
+nanos_since_epoch = 579911200
